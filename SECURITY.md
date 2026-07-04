@@ -8,7 +8,9 @@ Security fixes are best-effort for the latest published release and `main`.
 
 Please do not open public issues for suspected vulnerabilities that could expose secrets, private repositories, authentication material, or unsafe disclosure paths.
 
-Instead, report privately to the maintainer through GitHub security reporting if enabled, or through a private GitHub contact path.
+Instead, report privately through GitHub private vulnerability reporting:
+
+- https://github.com/henrydontbbai/opencode-advisor-mcp/security/advisories/new
 
 ## Responsible Use
 

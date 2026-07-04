@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security issue
-    url: https://github.com/henrydontbbai/opencode-advisor-mcp/security
-    about: Please use a private reporting path for security-sensitive issues.
+    url: https://github.com/henrydontbbai/opencode-advisor-mcp/security/advisories/new
+    about: Please use GitHub private vulnerability reporting for security-sensitive issues.

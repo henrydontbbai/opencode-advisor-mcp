@@ -16,3 +16,5 @@ This project is maintained on a best-effort basis.
 - requests for secret-handling guarantees beyond the documented scope
 
 Use GitHub Issues for normal support unless the topic is security-sensitive.
+
+For security-sensitive reports, do not use public Issues; use GitHub private vulnerability reporting instead.

@@ -6,6 +6,8 @@
 
 - [ ] `npm run smoke`
 - [ ] `npm test`
+- [ ] `npm run print-agent`
+- [ ] `npm pack --dry-run`
 
 ## Release And Privacy Checks
 

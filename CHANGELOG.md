@@ -6,6 +6,7 @@
 - made Windows-path tests deterministic with injected `win32` path/platform behavior
 - fixed OpenCode fallback detection so assistant text and tool output do not trigger false fallback failures
 - aligned public security-reporting docs with GitHub private vulnerability reporting
+- clarified source/GitHub install as the current path while npm publication remains future work
 
 ## 0.2.0
 

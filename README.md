@@ -6,9 +6,11 @@ This project is for people who already use Codex and OpenCode locally and want a
 
 ## Project Status
 
-- Current public release: `0.2.0`
+- Latest tagged GitHub release: `v0.2.0`
+- `main` includes unreleased stabilization changes after `v0.2.0`
 - Current scope: one MCP tool, `ask_opencode_advisor`
-- Supported mode: local install, local OpenCode agent template, manual GitHub and npm release flow
+- Supported mode: source/GitHub install with a local OpenCode agent template
+- npm package publication is planned for a future release and is not available yet
 
 ## Unofficial Compatibility Notice
 
@@ -39,26 +41,31 @@ Important boundaries:
 - Acting as an autonomous coding agent
 - Replacing your normal review process or judgment
 
-## Install From npm
+## Install From Source
 
-Install globally:
+Clone the repository, then install and verify dependencies:
 
 ```powershell
-npm install -g opencode-advisor-mcp
+git clone https://github.com/henrydontbbai/opencode-advisor-mcp.git
+cd opencode-advisor-mcp
+npm install
+npm run smoke
+npm test
 ```
 
-Write the bundled advisor template into your OpenCode agents directory:
+Copy the bundled advisor template into your OpenCode agents directory:
 
 ```powershell
-opencode-advisor-agent > <agent-dir>\codex-advisor.md
+New-Item -ItemType Directory -Force -Path <agent-dir>
+Copy-Item -LiteralPath ".\agents\codex-advisor.md" -Destination "<agent-dir>\codex-advisor.md" -Force
 ```
 
 Add this MCP config to Codex:
 
 ```toml
 [mcp_servers.opencode_advisor]
-command = "opencode-advisor-mcp"
-args = []
+command = "node"
+args = ["<repo-root>\\src\\server.mjs"]
 startup_timeout_sec = 30
 tool_timeout_sec = 180
 
@@ -68,11 +75,11 @@ OPENCODE_ADVISOR_TIMEOUT_MS = "120000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 ```
 
-If the global npm bin directory is not on PATH, use the full installed binary path instead of `opencode-advisor-mcp`.
+Replace `<repo-root>` with the absolute path to this source checkout.
 
-## Install From Source
+## npm Package Status
 
-If you prefer a source checkout workflow, use the steps in [docs/INSTALL.md](docs/INSTALL.md).
+The package metadata and CLI entrypoints are present for packaging checks, but `opencode-advisor-mcp` has not been published to npm yet. Use the source install path above for now.
 
 ## Usage
 

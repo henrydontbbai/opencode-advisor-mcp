@@ -1,13 +1,12 @@
 # Releasing
 
-Use this checklist for public GitHub and npm releases.
+Use this checklist for public GitHub releases. npm publication is a future optional path and is not part of the current release flow.
 
 ## Preconditions
 
 - GitHub account security is in good standing
-- npm account is authenticated
-- npm 2FA is enabled
-- package name availability is confirmed immediately before publish
+- private vulnerability reporting is enabled for the repository
+- the intended release tag and `package.json` version are aligned
 
 ## Verify The Tree
 
@@ -62,17 +61,15 @@ Run one final OpenCode read-only review focused on:
 4. create and push the public release tag
 5. create the GitHub Release from `CHANGELOG.md`
 
-## npm Release
+## Future npm Release
+
+Do not run this section for the current non-npm flow. Before any future npm release, confirm account authentication, 2FA, package ownership or availability, and the exact package version.
+
+Future command shape:
 
 ```powershell
 npm whoami
-npm publish --access public
-```
-
-If your npm environment supports provenance, prefer:
-
-```powershell
 npm publish --access public --provenance
 ```
 
-Publish from a clean checkout only.
+If provenance is unavailable in the environment, use `npm publish --access public`. Publish from a clean checkout only.

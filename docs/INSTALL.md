@@ -1,9 +1,8 @@
 # Install And Sync
 
-This project supports two install modes:
+This project currently supports one public install mode:
 
-1. npm install for normal public use
-2. source checkout for local development
+1. source checkout from GitHub
 
 Use placeholders consistently:
 
@@ -25,37 +24,6 @@ codex --version
 ```
 
 Each command should print a version or help output.
-
-## Recommended: npm Install
-
-Install the package globally:
-
-```powershell
-npm install -g opencode-advisor-mcp
-```
-
-Write the bundled advisor template:
-
-```powershell
-opencode-advisor-agent > <agent-dir>\codex-advisor.md
-```
-
-Add this MCP block to `<codex-config>`:
-
-```toml
-[mcp_servers.opencode_advisor]
-command = "opencode-advisor-mcp"
-args = []
-startup_timeout_sec = 30
-tool_timeout_sec = 180
-
-[mcp_servers.opencode_advisor.env]
-OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root-or-semicolon-list>"
-OPENCODE_ADVISOR_TIMEOUT_MS = "120000"
-OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
-```
-
-If `opencode-advisor-mcp` is not on PATH, use the full installed binary path instead.
 
 ## Source Install
 
@@ -88,6 +56,10 @@ OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root-or-semicolon-list>"
 OPENCODE_ADVISOR_TIMEOUT_MS = "120000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 ```
+
+## npm Package Status
+
+The package metadata and CLI entrypoints are present so package shape can be tested locally, but `opencode-advisor-mcp` has not been published to npm yet. Use the source install path above until a future npm release is announced.
 
 ## Runtime Sync For Development
 

@@ -112,6 +112,17 @@ function isAssistantTextEvent(event) {
   return typeof event?.part?.text === "string" || (event?.type === "text" && typeof event?.text === "string");
 }
 
+function diagnosticValueHasFallback(event) {
+  return valueHasFallback([
+    event?.message,
+    event?.error,
+    event?.stderr,
+    event?.stdout,
+    event?.detail,
+    event?.reason,
+  ]);
+}
+
 function outputHasAgentFallback(stdout = "", stderr = "") {
   for (const output of [stdout, stderr]) {
     for (const line of output.split(/\r?\n/)) {
@@ -120,7 +131,7 @@ function outputHasAgentFallback(stdout = "", stderr = "") {
 
       try {
         const event = JSON.parse(trimmed);
-        if (!isAssistantTextEvent(event) && valueHasFallback(event)) {
+        if (!isAssistantTextEvent(event) && diagnosticValueHasFallback(event)) {
           return true;
         }
         continue;

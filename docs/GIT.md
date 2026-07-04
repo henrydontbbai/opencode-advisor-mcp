@@ -11,7 +11,7 @@ This repository is the source-controlled copy for the public OpenCode Advisor MC
 Example:
 
 ```text
-codex/public-oss-release
+codex/ci-stabilization
 ```
 
 ## Before Commit
@@ -31,7 +31,7 @@ Expected:
 
 ## Public Release Hygiene
 
-Before the first public push:
+Before a public push or release:
 
 - scan the current tree
 - scan full history

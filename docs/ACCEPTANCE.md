@@ -1,6 +1,6 @@
 # Acceptance Checklist
 
-Run these checks before public release, before npm publish, and after changes to server, package, agent, or install docs.
+Run these checks before public GitHub release and after changes to server, package shape, agent, or install docs.
 
 ## Source Checks
 
@@ -36,7 +36,9 @@ npm run print-agent
 
 Expected: prints the bundled `codex-advisor.md` template.
 
-## Packed Install Check
+## Local Tarball Install Check
+
+This checks local package shape only. It does not prove that a public npm package has been published.
 
 From a disposable directory:
 
@@ -152,7 +154,7 @@ Expected:
 
 ## Final Review Gate
 
-Before pushing public history or publishing npm:
+Before pushing public history or creating a GitHub release:
 
 - run `npm run smoke`
 - run `npm test`

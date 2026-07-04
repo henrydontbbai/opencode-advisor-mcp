@@ -1,0 +1,51 @@
+{
+  "name": "opencode-advisor-mcp",
+  "version": "0.2.0",
+  "description": "A local MCP server that lets Codex ask a read-only OpenCode advisor for a second review pass on Git changes.",
+  "license": "MIT",
+  "author": "henrydontbbai",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/henrydontbbai/opencode-advisor-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/henrydontbbai/opencode-advisor-mcp/issues"
+  },
+  "homepage": "https://github.com/henrydontbbai/opencode-advisor-mcp#readme",
+  "keywords": [
+    "mcp",
+    "codex",
+    "opencode",
+    "code-review",
+    "cli",
+    "local-tooling"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "opencode-advisor-mcp": "src/server.mjs",
+    "opencode-advisor-agent": "bin/opencode-advisor-agent.mjs"
+  },
+  "files": [
+    "src/",
+    "agents/",
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "print-agent": "node bin/opencode-advisor-agent.mjs",
+    "smoke": "node -e \"import('./src/server.mjs').then((m) => { const s = m.createServer(); if (!s._registeredTools?.ask_opencode_advisor) process.exit(1); if (m.parseAllowedRoots(undefined, {}).length !== 0) process.exit(1); })\"",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  }
+}

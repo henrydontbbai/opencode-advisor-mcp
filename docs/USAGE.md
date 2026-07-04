@@ -1,0 +1,74 @@
+# Usage
+
+Use the advisor when you want a second review pass on the current Git state.
+
+## Typical Prompts
+
+```text
+Ask opencode_advisor to review the current changes.
+```
+
+```text
+Let OpenCode review this diff. Focus on risks, missing tests, privacy issues, and release readiness.
+```
+
+```text
+Call ask_opencode_advisor for this repository and summarize the actionable findings.
+```
+
+## What The MCP Tool Does
+
+The tool:
+
+1. Validates the requested repository and paths
+2. Collects Git status and diff context
+3. Runs `opencode run --agent codex-advisor`
+4. Returns structured JSON
+
+The advisor is a reviewer only. It should not write files, execute shell commands, commit, or take over implementation.
+
+## Privacy And Authorization
+
+Before using this tool:
+
+- Make sure you are allowed to review and disclose the repository content involved
+- Assume your configured OpenCode runtime may use a remote model provider
+- Avoid sensitive repositories unless that provider path is approved
+- Keep `OPENCODE_ADVISOR_ALLOWED_ROOTS` narrow
+
+This tool blocks `.env` reads in the bundled advisor template, but it does not guarantee that every secret in a repository is protected from review context.
+
+## Response Shape
+
+Success responses contain stable summary fields only:
+
+- `ok`
+- `base_ref`
+- `status`
+- `diff_truncated`
+- `advisor_text`
+- `opencode_exit_code`
+
+Failure responses contain:
+
+- `ok`
+- `error`
+- `message`
+- `details`
+
+Known error codes:
+
+- `invalid_cwd`
+- `invalid_paths`
+- `git_failed`
+- `opencode_not_found`
+- `opencode_failed`
+- `timeout`
+
+Public builds intentionally avoid echoing local absolute paths, allowed roots, resolved command paths, or raw process output in structured responses.
+
+## Notes
+
+- Each review run creates an OpenCode session record
+- The model/provider behavior is controlled by your local OpenCode configuration, not by this repository
+- Current implementation is a one-shot review tool, not a persistent OpenCode server

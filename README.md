@@ -6,7 +6,7 @@ This project is for people who already use Codex and OpenCode locally and want a
 
 ## Project Status
 
-- Public first release target: `0.2.0`
+- Current public release: `0.2.0`
 - Current scope: one MCP tool, `ask_opencode_advisor`
 - Supported mode: local install, local OpenCode agent template, manual GitHub and npm release flow
 

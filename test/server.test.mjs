@@ -43,10 +43,10 @@ function createMockRunProcess({ git = {}, opencode } = {}) {
 }
 
 test("parseAllowedRoots splits semicolon-separated Windows paths", () => {
-  const roots = parseAllowedRoots("C:\\workspace\\repo-root; C:\\workspace\\allowed-roots ");
+  const roots = parseAllowedRoots("C:\\workspace\\repo-root; C:\\workspace\\allowed-roots ", {}, path.win32);
   assert.equal(roots.length, 2);
-  assert.equal(path.basename(roots[0]).toLowerCase(), "repo-root");
-  assert.equal(path.basename(roots[1]).toLowerCase(), "allowed-roots");
+  assert.equal(path.win32.basename(roots[0]).toLowerCase(), "repo-root");
+  assert.equal(path.win32.basename(roots[1]).toLowerCase(), "allowed-roots");
 });
 
 test("parseAllowedRoots defaults to no allowed roots when env is unset", () => {
@@ -54,9 +54,9 @@ test("parseAllowedRoots defaults to no allowed roots when env is unset", () => {
 });
 
 test("isPathInsideAllowedRoots accepts child paths and rejects sibling prefixes", () => {
-  const roots = parseAllowedRoots(WINDOWS_ALLOWED_ROOT);
-  assert.equal(isPathInsideAllowedRoots(WINDOWS_CHILD_REPO, roots), true);
-  assert.equal(isPathInsideAllowedRoots("C:\\workspace\\repo-root-other", roots), false);
+  const roots = parseAllowedRoots(WINDOWS_ALLOWED_ROOT, {}, path.win32);
+  assert.equal(isPathInsideAllowedRoots(WINDOWS_CHILD_REPO, roots, path.win32), true);
+  assert.equal(isPathInsideAllowedRoots("C:\\workspace\\repo-root-other", roots, path.win32), false);
 });
 
 test("isPathInsideAllowedRoots uses platform case sensitivity", () => {
@@ -110,7 +110,7 @@ test("askOpenCodeAdvisor rejects cwd when allowed roots are not configured", asy
   const { runProcess, calls } = createMockRunProcess();
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: {} },
+    { runProcess, env: {}, platform: "win32" },
   );
 
   assert.equal(result.ok, false);
@@ -130,6 +130,7 @@ test("askOpenCodeAdvisor returns structured json for invalid review paths", asyn
     },
     {
       env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_REVIEW_ROOT },
+      platform: "win32",
     },
   );
 
@@ -148,6 +149,7 @@ test("askOpenCodeAdvisor rejects paths that escape cwd", async () => {
       },
       {
         env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+        platform: "win32",
       },
     );
 
@@ -364,7 +366,7 @@ test("askOpenCodeAdvisor returns git_failed when git command fails", async () =>
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT } },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
   );
 
   assert.equal(result.ok, false);
@@ -380,7 +382,7 @@ test("askOpenCodeAdvisor returns opencode_not_found when process spawn fails", a
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT } },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
   );
 
   assert.equal(result.ok, false);
@@ -396,7 +398,11 @@ test("askOpenCodeAdvisor returns timeout when opencode times out", async () => {
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT, OPENCODE_ADVISOR_TIMEOUT_MS: "10" } },
+    {
+      runProcess,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT, OPENCODE_ADVISOR_TIMEOUT_MS: "10" },
+      platform: "win32",
+    },
   );
 
   assert.equal(result.ok, false);
@@ -412,7 +418,7 @@ test("askOpenCodeAdvisor returns opencode_failed for nonzero exit", async () => 
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT } },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
   );
 
   assert.equal(result.ok, false);
@@ -436,7 +442,7 @@ test("askOpenCodeAdvisor does not treat advisor text mentioning fallback as agen
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT } },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
   );
 
   assert.equal(result.ok, true);
@@ -455,7 +461,27 @@ test("askOpenCodeAdvisor detects agent fallback in structured diagnostics", asyn
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT } },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "opencode_failed");
+  assert.deepEqual(result.details, {});
+});
+
+test("askOpenCodeAdvisor detects agent fallback in structured stderr diagnostics", async () => {
+  const { runProcess } = createMockRunProcess({
+    opencode: {
+      code: 0,
+      stdout: "",
+      stderr: JSON.stringify({ type: "log", message: 'agent "codex-advisor" not found' }),
+      timedOut: false,
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
   );
 
   assert.equal(result.ok, false);
@@ -475,12 +501,63 @@ test("askOpenCodeAdvisor detects actual agent fallback in non-json process outpu
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT } },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
   );
 
   assert.equal(result.ok, false);
   assert.equal(result.error, "opencode_failed");
   assert.deepEqual(result.details, {});
+});
+
+test("askOpenCodeAdvisor ignores fallback phrases inside top-level assistant text events", async () => {
+  const { runProcess } = createMockRunProcess({
+    opencode: {
+      code: 0,
+      stdout: JSON.stringify({ type: "text", text: "Falling back to default agent is mentioned in docs." }),
+      stderr: "",
+      timedOut: false,
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+  );
+
+  assert.equal(result.ok, true);
+  assert.match(result.advisor_text, /Falling back to default agent/);
+});
+
+test("askOpenCodeAdvisor ignores fallback phrases inside tool output events", async () => {
+  const { runProcess } = createMockRunProcess({
+    opencode: {
+      code: 0,
+      stdout: [
+        JSON.stringify({
+          type: "tool_use",
+          part: {
+            type: "tool",
+            tool: "read",
+            state: {
+              status: "completed",
+              output: 'tool output mentioning "Falling back to default agent" should stay inert',
+            },
+          },
+        }),
+        JSON.stringify({ type: "text", part: { text: "Looks consistent" } }),
+      ].join("\n"),
+      stderr: "",
+      timedOut: false,
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.advisor_text, "Looks consistent");
 });
 
 test("createServer registers advisor tool with injected dependencies", async () => {

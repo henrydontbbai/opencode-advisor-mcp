@@ -1,37 +1,21 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { askOpenCodeAdvisor, extractOpenCodeText } from "../src/server.mjs";
+import {
+  DEFAULT_TIMEOUT_MS,
+  SUCCESS_RESPONSE_KEYS,
+  outputHasAgentFallback,
+  outputHasUpstreamUnavailable,
+  positiveNumber,
+  resolveOpencodeCommand,
+  textHasAgentFallback,
+  textHasUpstreamUnavailable,
+} from "../src/runtime-shared.mjs";
 
-const DEFAULT_TIMEOUT_MS = 120000;
-const FALLBACK_PATTERN = /agent "codex-advisor" not found|Falling back to default agent/i;
-const UPSTREAM_UNAVAILABLE_PATTERN = /upstream service temporarily unavailable|service temporarily unavailable/i;
 const FORBIDDEN_SUCCESS_KEYS = new Set(["cwd", "stderr_tail", "stdout_tail", "allowed_roots"]);
-const ALLOWED_SUCCESS_KEYS = new Set(["ok", "base_ref", "status", "diff_truncated", "advisor_text", "opencode_exit_code"]);
-
-function pathForPlatform(platform = process.platform) {
-  return platform === "win32" ? path.win32 : path.posix;
-}
-
-function positiveNumber(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : fallback;
-}
-
-function resolveOpencodeCommand(base, { env = process.env, platform = process.platform, exists = existsSync } = {}) {
-  if (base !== "opencode") return base;
-  if (platform !== "win32") return "opencode";
-
-  const appData = env.APPDATA;
-  if (appData) {
-    const exePath = pathForPlatform(platform).join(appData, "npm", "node_modules", "opencode-ai", "bin", "opencode.exe");
-    if (exists(exePath)) return exePath;
-  }
-
-  return "opencode";
-}
+const ALLOWED_SUCCESS_KEYS = new Set(SUCCESS_RESPONSE_KEYS);
 
 function runCommand(command, args, { cwd, env = process.env, platform = process.platform, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
@@ -67,14 +51,6 @@ function runCommand(command, args, { cwd, env = process.env, platform = process.
       resolve({ code, stdout, stderr, timedOut });
     });
   });
-}
-
-function outputHasFallback(stdout = "", stderr = "") {
-  return FALLBACK_PATTERN.test(`${stdout}\n${stderr}`);
-}
-
-function outputHasUpstreamUnavailable(stdout = "", stderr = "") {
-  return UPSTREAM_UNAVAILABLE_PATTERN.test(`${stdout}\n${stderr}`);
 }
 
 function unique(items) {
@@ -182,7 +158,7 @@ export async function runDoctor({
     return buildFailureReport("timeout", steps, "Direct OpenCode agent check timed out");
   }
 
-  if (outputHasFallback(directResult.stdout, directResult.stderr)) {
+  if (outputHasAgentFallback(directResult.stdout, directResult.stderr)) {
     steps.push({
       id: "agent",
       label: "Direct OpenCode agent check",
@@ -237,8 +213,8 @@ export async function runDoctor({
     if (healthResult.error === "invalid_cwd") bucket = "invalid_cwd_or_allowed_roots";
     else if (healthResult.error === "timeout") bucket = "timeout";
     else if (healthResult.error === "opencode_not_found") bucket = "opencode_not_found";
-    else if (FALLBACK_PATTERN.test(healthResult.message || "")) bucket = "agent_missing_or_fallback";
-    else if (UPSTREAM_UNAVAILABLE_PATTERN.test(healthResult.message || "")) bucket = "upstream_unavailable";
+    else if (textHasAgentFallback(healthResult.message || "")) bucket = "agent_missing_or_fallback";
+    else if (textHasUpstreamUnavailable(healthResult.message || "")) bucket = "upstream_unavailable";
 
     steps.push({
       id: "health",

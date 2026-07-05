@@ -51,6 +51,7 @@ cd opencode-advisor-mcp
 npm install
 npm run smoke
 npm test
+npm run test:doctor
 ```
 
 Copy the bundled advisor template into your OpenCode agents directory:
@@ -115,6 +116,7 @@ From the repository:
 npm install
 npm run smoke
 npm test
+npm run test:doctor
 $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
 npm run doctor
 ```

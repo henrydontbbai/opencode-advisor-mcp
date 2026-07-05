@@ -43,7 +43,7 @@
     "doctor": "node scripts/opencode-advisor-doctor.mjs",
     "print-agent": "node bin/opencode-advisor-agent.mjs",
     "smoke": "node -e \"import('./src/server.mjs').then((m) => { const s = m.createServer(); if (!s._registeredTools?.ask_opencode_advisor) process.exit(1); if (m.parseAllowedRoots(undefined, {}).length !== 0) process.exit(1); })\"",
-    "test": "node --test test/server.test.mjs test/package-contract.test.mjs",
+    "test": "node --test test/server.test.mjs test/runtime-shared.test.mjs test/package-contract.test.mjs",
     "test:doctor": "node --test test/doctor.test.mjs"
   },
   "dependencies": {

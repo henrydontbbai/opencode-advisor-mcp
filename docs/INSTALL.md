@@ -57,6 +57,19 @@ OPENCODE_ADVISOR_TIMEOUT_MS = "120000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 ```
 
+From `<repo-root>`, set allowed roots in the same shell and then run the local doctor check. This terminal command does not inherit MCP env from your Codex config file.
+
+```powershell
+$env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+npm run doctor
+```
+
+Expected:
+
+- the direct `codex-advisor` agent check passes
+- the local `askOpenCodeAdvisor({ include_diff:false, include_status:false })` health check passes
+- the summary does not report forbidden fields such as `cwd` or stderr tails
+
 ## npm Package Status
 
 The package metadata and CLI entrypoints are present so package shape can be tested locally, but `opencode-advisor-mcp` has not been published to npm yet. Use the source install path above until a future npm release is announced.
@@ -85,3 +98,10 @@ npm install --prefix <runtime-dir>
 - `opencode_not_found`: `opencode` is missing from PATH or `OPENCODE_ADVISOR_OPENCODE_CMD` is wrong
 - `opencode_failed`: the `codex-advisor` agent is missing or the OpenCode run failed
 - MCP tool missing in Codex: reload or restart Codex after config changes
+
+If `npm run doctor` fails, use its bucket as the first triage hint:
+
+- `agent_missing_or_fallback`: reinstall `agents/codex-advisor.md` and confirm `opencode agent list`
+- `invalid_cwd_or_allowed_roots`: narrow or correct `OPENCODE_ADVISOR_ALLOWED_ROOTS`, then rerun doctor from `<repo-root>`
+- `upstream_unavailable`: your configured OpenCode provider path is temporarily unavailable
+- `timeout`: rerun or increase `OPENCODE_ADVISOR_TIMEOUT_MS`

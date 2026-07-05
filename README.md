@@ -77,6 +77,15 @@ OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 
 Replace `<repo-root>` with the absolute path to this source checkout.
 
+After the agent template is installed, set allowed roots in the same shell that will run doctor. The terminal check does not inherit MCP env from the Codex config block above.
+
+```powershell
+$env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+npm run doctor
+```
+
+`npm run doctor` is a local source-install health check. It depends on your local OpenCode runtime, the bundled `codex-advisor` agent, and a valid `OPENCODE_ADVISOR_ALLOWED_ROOTS` value in the shell that launches it. It is not proof of npm publication.
+
 ## npm Package Status
 
 The package metadata and CLI entrypoints are present for packaging checks, but `opencode-advisor-mcp` has not been published to npm yet. Use the source install path above for now.
@@ -106,7 +115,11 @@ From the repository:
 npm install
 npm run smoke
 npm test
+$env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+npm run doctor
 ```
+
+`npm run doctor` is an extra local runtime check for source installs. It is not part of the GitHub CI gate and it does not replace `npm run print-agent` or `npm pack --dry-run`.
 
 Release and acceptance steps live in:
 

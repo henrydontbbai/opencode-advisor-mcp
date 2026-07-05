@@ -14,6 +14,32 @@ npm test
 
 Expected: all tests pass.
 
+## Local Doctor Check
+
+This is an extra local runtime check for source installs. It is not part of the GitHub CI gate and it does not prove that an npm package has been published.
+
+From the repository root after the agent template is installed, set allowed roots in the same shell and then run doctor. This terminal check does not inherit MCP env from your Codex config.
+
+```powershell
+$env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+npm run doctor
+```
+
+Expected:
+
+- the direct `codex-advisor` agent check passes
+- the local `askOpenCodeAdvisor({ include_diff:false, include_status:false })` health check passes
+- the summary does not report forbidden fields such as `cwd`, `stderr_tail`, `stdout_tail`, or `allowed_roots`
+
+If doctor fails, use the bucket as first triage:
+
+- `opencode_not_found`
+- `agent_missing_or_fallback`
+- `invalid_cwd_or_allowed_roots`
+- `upstream_unavailable`
+- `timeout`
+- `generic_opencode_failure`
+
 ## Packaging Checks
 
 Dry-run the package:
@@ -158,6 +184,7 @@ Before pushing public history or creating a GitHub release:
 
 - run `npm run smoke`
 - run `npm test`
+- run `npm run doctor` for source installs
 - inspect `npm pack --dry-run`
 - run one final OpenCode `codex-advisor` read-only review
 - verify GitHub repo URL, package version, and release tag all match the intended public release

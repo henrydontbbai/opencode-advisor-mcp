@@ -33,6 +33,7 @@ From `<repo-root>`:
 npm install
 npm run smoke
 npm test
+npm run test:doctor
 ```
 
 Create the agent file:

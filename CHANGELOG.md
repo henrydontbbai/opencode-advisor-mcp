@@ -2,9 +2,10 @@
 
 ## Unreleased
 
+- centralized shared runtime helpers for command resolution, numeric env parsing, success-response shape, and structured diagnostics
 - stabilized GitHub Actions across Ubuntu/Windows and Node 20/22 by using an explicit test entry and adding `print-agent` plus `pack --dry-run` gates
 - made Windows-path tests deterministic with injected `win32` path/platform behavior
-- fixed OpenCode fallback detection so assistant text and tool output do not trigger false fallback failures
+- fixed OpenCode fallback and upstream detection drift so assistant text and tool output do not trigger false failures in either server or doctor
 - aligned public security-reporting docs with GitHub private vulnerability reporting
 - clarified source/GitHub install as the current path while npm publication remains future work
 

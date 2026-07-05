@@ -14,6 +14,7 @@ Use this checklist for public GitHub releases. npm publication is a future optio
 npm install
 npm run smoke
 npm test
+npm run test:doctor
 npm pack --dry-run
 ```
 
@@ -22,6 +23,7 @@ Also verify:
 - the tarball contains only intended files
 - `npm run print-agent` prints the bundled template
 - a packed install works in a fresh temp directory
+- for source installs, `npm run doctor` passes from the repo root in the same shell where `OPENCODE_ADVISOR_ALLOWED_ROOTS` is set
 
 ## Scan For Public Release Problems
 

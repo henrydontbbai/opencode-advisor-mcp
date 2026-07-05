@@ -95,6 +95,17 @@ test("extractOpenCodeText removes model think blocks", () => {
   assert.equal(extractOpenCodeText(stdout), "## Summary\nOK");
 });
 
+test("extractOpenCodeText removes dangling think preambles before the final answer", () => {
+  const stdout = JSON.stringify({
+    type: "text",
+    part: {
+      text: "<think>\nprivate reasoning\n<think>\nmore reasoning\n## Summary\nOK",
+    },
+  });
+
+  assert.equal(extractOpenCodeText(stdout), "## Summary\nOK");
+});
+
 test("extractOpenCodeText supports top-level text and mixed fallback lines", () => {
   const stdout = [
     "plain fallback",

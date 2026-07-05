@@ -88,6 +88,8 @@ This doctor check is local-only. It depends on:
 - a registered `codex-advisor` agent
 - a valid `OPENCODE_ADVISOR_ALLOWED_ROOTS` setting in the shell for the current repo
 
+Run it from the repository root in the same shell where `OPENCODE_ADVISOR_ALLOWED_ROOTS` is set. Doctor uses the same fallback and upstream diagnostic rules as the server, so quoted assistant text alone should not trip a fallback bucket.
+
 It is not part of the GitHub CI gate and it does not imply that an npm package has been published.
 
 ## Quick Troubleshooting

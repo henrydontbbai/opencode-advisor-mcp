@@ -10,6 +10,7 @@ From the repository:
 npm install
 npm run smoke
 npm test
+npm run test:doctor
 ```
 
 Expected: all tests pass.
@@ -184,6 +185,7 @@ Before pushing public history or creating a GitHub release:
 
 - run `npm run smoke`
 - run `npm test`
+- run `npm run test:doctor`
 - run `npm run doctor` for source installs
 - inspect `npm pack --dry-run`
 - run one final OpenCode `codex-advisor` read-only review

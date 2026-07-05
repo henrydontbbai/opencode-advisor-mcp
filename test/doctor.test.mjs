@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runDoctor, findPayloadLeaks } from "../scripts/opencode-advisor-doctor.mjs";
+import { createSuccessResponse, SUCCESS_RESPONSE_KEYS } from "../src/runtime-shared.mjs";
 
 const WINDOWS_ALLOWED_ROOT = "C:\\workspace\\repo-root";
 const WINDOWS_CHILD_REPO = `${WINDOWS_ALLOWED_ROOT}\\project`;
@@ -11,6 +12,19 @@ function createCommandResult(overrides = {}) {
     stdout: JSON.stringify({ type: "text", part: { text: "OK" } }),
     stderr: "",
     timedOut: false,
+    ...overrides,
+  };
+}
+
+function createCanonicalSuccessPayload(overrides = {}) {
+  return {
+    ...createSuccessResponse({
+      baseRef: "HEAD",
+      status: "",
+      diffTruncated: false,
+      advisorText: "OK",
+      opencodeExitCode: 0,
+    }),
     ...overrides,
   };
 }
@@ -31,14 +45,7 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
     askOpenCodeAdvisorImpl: async (input, deps) => {
       advisorInput = input;
       advisorDeps = deps;
-      return {
-        ok: true,
-        base_ref: "HEAD",
-        status: "",
-        diff_truncated: false,
-        advisor_text: "OK",
-        opencode_exit_code: 0,
-      };
+      return createCanonicalSuccessPayload();
     },
   });
 
@@ -95,6 +102,24 @@ test("runDoctor classifies agent fallback from direct OpenCode output", async ()
 
   assert.equal(report.ok, false);
   assert.equal(report.bucket, "agent_missing_or_fallback");
+});
+
+test("runDoctor ignores fallback phrases inside direct assistant text output", async () => {
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    runCommand: async () =>
+      createCommandResult({
+        stdout: JSON.stringify({
+          type: "text",
+          part: { text: "The phrase Falling back to default agent appears in docs." },
+        }),
+      }),
+    askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload(),
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.bucket, null);
 });
 
 test("runDoctor classifies invalid_cwd from health check as allowed-roots problem", async () => {
@@ -216,16 +241,19 @@ test("findPayloadLeaks reports forbidden success fields", () => {
 
 test("findPayloadLeaks ignores cwd mentions inside advisor_text", () => {
   assert.deepEqual(
-    findPayloadLeaks({
-      ok: true,
-      base_ref: "HEAD",
-      status: "",
-      diff_truncated: false,
+    findPayloadLeaks(createCanonicalSuccessPayload({
       advisor_text: `Reviewed ${WINDOWS_CHILD_REPO}`,
-      opencode_exit_code: 0,
-    }, { cwd: WINDOWS_CHILD_REPO }),
+    }), { cwd: WINDOWS_CHILD_REPO }),
     [],
   );
+});
+
+test("findPayloadLeaks accepts the canonical server success response shape", () => {
+  const payload = Object.fromEntries(
+    SUCCESS_RESPONSE_KEYS.map((key) => [key, createCanonicalSuccessPayload()[key]]),
+  );
+
+  assert.deepEqual(findPayloadLeaks(payload), []);
 });
 
 test("runDoctor fails sanitization check when success payload exposes forbidden fields", async () => {
@@ -234,12 +262,7 @@ test("runDoctor fails sanitization check when success payload exposes forbidden 
     env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
     runCommand: async () => createCommandResult(),
     askOpenCodeAdvisorImpl: async () => ({
-      ok: true,
-      base_ref: "HEAD",
-      status: "",
-      diff_truncated: false,
-      advisor_text: "OK",
-      opencode_exit_code: 0,
+      ...createCanonicalSuccessPayload(),
       cwd: "/repo",
     }),
   });

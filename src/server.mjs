@@ -6,17 +6,19 @@ import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import {
+  DEFAULT_MAX_DIFF_CHARS,
+  DEFAULT_TIMEOUT_MS,
+  createSuccessResponse,
+  outputHasAgentFallback,
+  pathForPlatform,
+  positiveNumber,
+  resolveOpencodeCommand,
+} from "./runtime-shared.mjs";
 
-const DEFAULT_MAX_DIFF_CHARS = 60000;
-const DEFAULT_TIMEOUT_MS = 120000;
-const FALLBACK_PATTERN = /agent "codex-advisor" not found|Falling back to default agent/i;
 const INVALID_CWD_MESSAGE = "cwd is outside configured allowed roots";
 const GIT_FAILED_MESSAGE = "Git context collection failed";
 const OPENCODE_NOT_FOUND_MESSAGE = "OpenCode command could not be started";
-
-function pathForPlatform(platform = process.platform) {
-  return platform === "win32" ? path.win32 : path.posix;
-}
 
 export function parseAllowedRoots(input, env = process.env, pathApi = path) {
   const source = input ?? env.OPENCODE_ADVISOR_ALLOWED_ROOTS ?? "";
@@ -52,6 +54,29 @@ export function truncateText(text, maxChars) {
   };
 }
 
+function stripModelReasoning(text) {
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+
+  for (;;) {
+    const danglingMatch = /<think>/i.exec(cleaned);
+    if (!danglingMatch) {
+      return cleaned;
+    }
+
+    const start = danglingMatch.index;
+    const remainder = cleaned.slice(start);
+    const headingMatch = /(^|\r?\n)(#{1,6}\s)/m.exec(remainder);
+
+    if (!headingMatch) {
+      cleaned = cleaned.slice(0, start);
+      continue;
+    }
+
+    const headingOffset = headingMatch.index + headingMatch[0].length - headingMatch[2].length;
+    cleaned = `${cleaned.slice(0, start)}${remainder.slice(headingOffset)}`;
+  }
+}
+
 export function extractOpenCodeText(stdout) {
   const textParts = [];
   const fallbackLines = [];
@@ -73,78 +98,9 @@ export function extractOpenCodeText(stdout) {
   }
 
   const text = textParts.length > 0 ? textParts.join("") : fallbackLines.join("\n").trim();
-  return text.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/[ \t]{2,}/g, " ").trim();
+  return stripModelReasoning(text).replace(/[ \t]{2,}/g, " ").trim();
 }
 
-function commandName(base, { env = process.env, platform = process.platform, exists = existsSync } = {}) {
-  if (base !== "opencode") return base;
-  if (platform !== "win32") return "opencode";
-
-  const appData = env.APPDATA;
-  if (appData) {
-    const exePath = pathForPlatform(platform).join(appData, "npm", "node_modules", "opencode-ai", "bin", "opencode.exe");
-    if (exists(exePath)) return exePath;
-  }
-
-  return "opencode";
-}
-
-function tail(text, maxChars = 4000) {
-  if (!text) return "";
-  return text.length > maxChars ? text.slice(-maxChars) : text;
-}
-
-function positiveNumber(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : fallback;
-}
-
-function valueHasFallback(value) {
-  if (typeof value === "string") return FALLBACK_PATTERN.test(value);
-  if (Array.isArray(value)) return value.some((entry) => valueHasFallback(entry));
-  if (value && typeof value === "object") {
-    return Object.values(value).some((entry) => valueHasFallback(entry));
-  }
-  return false;
-}
-
-function isAssistantTextEvent(event) {
-  return typeof event?.part?.text === "string" || (event?.type === "text" && typeof event?.text === "string");
-}
-
-function diagnosticValueHasFallback(event) {
-  return valueHasFallback([
-    event?.message,
-    event?.error,
-    event?.stderr,
-    event?.stdout,
-    event?.detail,
-    event?.reason,
-  ]);
-}
-
-function outputHasAgentFallback(stdout = "", stderr = "") {
-  for (const output of [stdout, stderr]) {
-    for (const line of output.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      try {
-        const event = JSON.parse(trimmed);
-        if (!isAssistantTextEvent(event) && diagnosticValueHasFallback(event)) {
-          return true;
-        }
-        continue;
-      } catch {
-        if (FALLBACK_PATTERN.test(trimmed)) {
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
 
 function runProcess(command, args, { cwd, input = "", timeoutMs = 30000, env = process.env, platform = process.platform } = {}) {
   return new Promise((resolve, reject) => {
@@ -352,7 +308,7 @@ export async function askOpenCodeAdvisor(input = {}, deps = {}) {
     paths,
   });
 
-  const opencodeCommand = commandName(runtime.env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", {
+  const opencodeCommand = resolveOpencodeCommand(runtime.env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", {
     env: runtime.env,
     platform: runtime.platform,
     exists: runtime.existsSync,
@@ -400,14 +356,13 @@ export async function askOpenCodeAdvisor(input = {}, deps = {}) {
     };
   }
 
-  return {
-    ok: true,
-    base_ref: baseRef,
+  return createSuccessResponse({
+    baseRef,
     status: context.status,
-    diff_truncated: context.diffTruncated,
-    advisor_text: extractOpenCodeText(result.stdout),
-    opencode_exit_code: result.code,
-  };
+    diffTruncated: context.diffTruncated,
+    advisorText: extractOpenCodeText(result.stdout),
+    opencodeExitCode: result.code,
+  });
 }
 
 export function createServer(deps = {}) {

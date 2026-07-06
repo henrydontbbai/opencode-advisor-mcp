@@ -341,7 +341,7 @@ test("askOpenCodeAdvisor falls back to default timeout for invalid timeout env",
 
   const opencodeCall = calls.find((call) => call.command === "opencode");
   assert.equal(result.ok, true);
-  assert.equal(opencodeCall.options.timeoutMs, 120000);
+  assert.equal(opencodeCall.options.timeoutMs, 300000);
 });
 
 test("askOpenCodeAdvisor applies max diff chars from env", async () => {

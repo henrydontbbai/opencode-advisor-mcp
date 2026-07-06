@@ -55,7 +55,7 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
     {
       command: "opencode",
       args: ["run", "--agent", "codex-advisor", "--format", "json", "Say OK only."],
-      options: { cwd: WINDOWS_CHILD_REPO, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", timeoutMs: 120000 },
+      options: { cwd: WINDOWS_CHILD_REPO, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", timeoutMs: 300000 },
     },
   ]);
   assert.deepEqual(advisorInput, {
@@ -166,7 +166,7 @@ test("runDoctor classifies timeout from health check", async () => {
     askOpenCodeAdvisorImpl: async () => ({
       ok: false,
       error: "timeout",
-      message: "OpenCode advisor timed out after 120000ms",
+      message: "OpenCode advisor timed out after 300000ms",
       details: {},
     }),
   });

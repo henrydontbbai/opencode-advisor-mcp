@@ -68,15 +68,17 @@ Add this MCP config to Codex:
 command = "node"
 args = ["<repo-root>\\src\\server.mjs"]
 startup_timeout_sec = 30
-tool_timeout_sec = 180
+tool_timeout_sec = 420
 
 [mcp_servers.opencode_advisor.env]
 OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root-or-semicolon-list>"
-OPENCODE_ADVISOR_TIMEOUT_MS = "120000"
+OPENCODE_ADVISOR_TIMEOUT_MS = "300000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 ```
 
 Replace `<repo-root>` with the absolute path to this source checkout.
+
+Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or Codex may cut off the MCP tool before the inner OpenCode timeout is reached.
 
 After the agent template is installed, set allowed roots in the same shell that will run doctor. The terminal check does not inherit MCP env from the Codex config block above.
 

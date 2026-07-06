@@ -50,13 +50,15 @@ Add this MCP block to `<codex-config>`:
 command = "node"
 args = ["<repo-root>\\src\\server.mjs"]
 startup_timeout_sec = 30
-tool_timeout_sec = 180
+tool_timeout_sec = 420
 
 [mcp_servers.opencode_advisor.env]
 OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root-or-semicolon-list>"
-OPENCODE_ADVISOR_TIMEOUT_MS = "120000"
+OPENCODE_ADVISOR_TIMEOUT_MS = "300000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 ```
+
+Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or the outer MCP tool will time out before the inner OpenCode run finishes.
 
 From `<repo-root>`, set allowed roots in the same shell and then run the local doctor check. This terminal command does not inherit MCP env from your Codex config file.
 
@@ -105,4 +107,4 @@ If `npm run doctor` fails, use its bucket as the first triage hint:
 - `agent_missing_or_fallback`: reinstall `agents/codex-advisor.md` and confirm `opencode agent list`
 - `invalid_cwd_or_allowed_roots`: narrow or correct `OPENCODE_ADVISOR_ALLOWED_ROOTS`, then rerun doctor from `<repo-root>`
 - `upstream_unavailable`: your configured OpenCode provider path is temporarily unavailable
-- `timeout`: rerun or increase `OPENCODE_ADVISOR_TIMEOUT_MS`
+- `timeout`: rerun or increase `OPENCODE_ADVISOR_TIMEOUT_MS`, and keep `tool_timeout_sec` higher than the inner timeout

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 export const DEFAULT_MAX_DIFF_CHARS = 60000;
-export const DEFAULT_TIMEOUT_MS = 120000;
+export const DEFAULT_TIMEOUT_MS = 300000;
 
 const AGENT_FALLBACK_PATTERN = /agent "codex-advisor" not found|Falling back to default agent/i;
 const UPSTREAM_UNAVAILABLE_PATTERN = /upstream service temporarily unavailable|service temporarily unavailable/i;

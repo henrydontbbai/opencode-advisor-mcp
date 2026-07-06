@@ -72,6 +72,7 @@ Public builds intentionally avoid echoing local absolute paths, allowed roots, r
 - Each review run creates an OpenCode session record
 - The model/provider behavior is controlled by your local OpenCode configuration, not by this repository
 - Current implementation is a one-shot review tool, not a persistent OpenCode server
+- Inner review timeout is controlled by `OPENCODE_ADVISOR_TIMEOUT_MS`; keep outer MCP `tool_timeout_sec` larger so Codex does not truncate the run first
 
 ## Local Doctor
 
@@ -100,5 +101,5 @@ Use the doctor bucket as the first triage hint:
 - `agent_missing_or_fallback`: `codex-advisor` is missing or OpenCode fell back to another agent; reinstall `agents/codex-advisor.md` and check `opencode agent list`
 - `invalid_cwd_or_allowed_roots`: the current repo is outside `OPENCODE_ADVISOR_ALLOWED_ROOTS`; narrow or correct that env var and rerun doctor from the repo root
 - `upstream_unavailable`: the configured OpenCode provider path is temporarily unavailable
-- `timeout`: the provider path did not answer before `OPENCODE_ADVISOR_TIMEOUT_MS`
+- `timeout`: the provider path did not answer before `OPENCODE_ADVISOR_TIMEOUT_MS`; if you raise the inner timeout, also raise outer MCP `tool_timeout_sec`
 - `generic_opencode_failure`: inspect the failing doctor step, then rerun the direct `opencode run` and local `askOpenCodeAdvisor(...)` acceptance checks

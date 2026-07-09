@@ -104,10 +104,20 @@ Default queue policy:
 - retry hint `30000ms`
 - pending-task TTL `86400000ms`
 
+Current queue env knobs:
+
+- `OPENCODE_ADVISOR_QUEUE_MAX_PENDING`
+- `OPENCODE_ADVISOR_TASK_TTL_MS`
+- `OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS`
+- `OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS`
+- `OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS`
+- `OPENCODE_ADVISOR_QUEUE_POLL_MS`
+
 Queue files live under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
 
 If you set `OPENCODE_ADVISOR_QUEUE_DIR`, that value is used as the queue directory directly.
 If you set `OPENCODE_ADVISOR_QUEUE_LOG_DIR`, detached runner stdout/stderr is captured there for local diagnosis.
+If a task ages out, the expired status is not timeout: it means the queued/running task is no longer recoverable and should be treated as a stale local queue record instead of an in-flight OpenCode timeout.
 
 ## Notes
 

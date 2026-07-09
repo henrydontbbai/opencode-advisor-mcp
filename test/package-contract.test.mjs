@@ -15,6 +15,8 @@ test("default npm test excludes doctor-specific test coverage", () => {
   assert.match(packageJson.scripts.test, /test\/server\.test\.mjs/);
   assert.match(packageJson.scripts.test, /test\/runtime-shared\.test\.mjs/);
   assert.match(packageJson.scripts.test, /test\/package-contract\.test\.mjs/);
+  assert.match(packageJson.scripts.test, /test\/mcp-integration\.test\.mjs/);
+  assert.match(packageJson.scripts.test, /test\/queue-integration\.test\.mjs/);
   assert.match(packageJson.scripts.test, /test\/bin\.test\.mjs/);
   assert.doesNotMatch(packageJson.scripts.test, /doctor\.test\.mjs/);
   assert.equal(packageJson.scripts["test:doctor"], "node --test test/doctor.test.mjs");
@@ -39,6 +41,7 @@ test("doctor stays out of the published CLI and files contract", () => {
     false,
   );
   assert.deepEqual(packageJson.files, ["src/", "agents/", "bin/", "README.md", "LICENSE"]);
+  assert.match(packageJson.scripts.doctor, /source checkout/i);
 });
 
 test("docs keep source install as the current path while npm stays unpublished", () => {
@@ -58,4 +61,23 @@ test("docs advertise planner plus queued task lookup without claiming npm releas
   assert.match(usageDoc, /get_opencode_task.*same public result shape/i);
   assert.match(acceptanceDoc, /manual queued-path poll/i);
   assert.match(acceptanceDoc, /completed result should preserve `advisor_text` or `planner_text`/i);
+});
+
+test("docs describe the current queue knobs and pending semantics", () => {
+  const combinedDocs = [readme, usageDoc, acceptanceDoc].join("\n");
+
+  for (const key of [
+    "OPENCODE_ADVISOR_QUEUE_MAX_PENDING",
+    "OPENCODE_ADVISOR_TASK_TTL_MS",
+    "OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS",
+    "OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS",
+    "OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS",
+    "OPENCODE_ADVISOR_QUEUE_POLL_MS",
+  ]) {
+    assert.match(combinedDocs, new RegExp(key));
+  }
+
+  assert.match(usageDoc, /expired .* not timeout/i);
+  assert.match(usageDoc, /local diagnosis/i);
+  assert.match(acceptanceDoc, /expired status rather than timeout/i);
 });

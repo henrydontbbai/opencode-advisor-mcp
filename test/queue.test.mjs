@@ -8,6 +8,7 @@ import {
   createTaskFile,
   ensureQueueRunner,
   getQueueConfig,
+  lockSubmissionForTest,
   processQueueOnce,
   readTaskFile,
   runQueueRunner,
@@ -443,6 +444,32 @@ test("createTaskQueue recovers from a stale submission lock", async () => {
   assert.equal(result.error, "queued");
   assert.equal(spawnCalled, true);
   assert.equal(queueFiles.length, 1);
+});
+
+test("lockSubmissionForTest retries transient EPERM on Windows-style lock acquisition", async () => {
+  let openAttempts = 0;
+  const fakeHandle = {
+    async close() {},
+  };
+
+  const result = await lockSubmissionForTest("C:\\fake-queue", async () => "ok", {
+    openImpl: async () => {
+      openAttempts += 1;
+      if (openAttempts === 1) {
+        const error = new Error("operation not permitted");
+        error.code = "EPERM";
+        throw error;
+      }
+      return fakeHandle;
+    },
+    unlinkImpl: async () => {},
+    statImpl: async () => ({ mtimeMs: Date.now() }),
+    delayImpl: async () => {},
+    pathApi: path.win32,
+  });
+
+  assert.equal(result, "ok");
+  assert.equal(openAttempts, 2);
 });
 
 test("createTaskQueue ignores TTL-expired pending tasks when checking queue_full", async () => {

@@ -240,34 +240,40 @@ async function readRunnerState(queueDir) {
   return readJsonIfExists(runnerStatePath(queueDir));
 }
 
-async function withSubmissionLock(queueDir, fn) {
-  const lockPath = path.join(queueDir, "_submit.lock");
+async function withSubmissionLock(queueDir, fn, deps = {}) {
+  const pathApi = deps.pathApi ?? path;
+  const openImpl = deps.openImpl ?? ((filePath, flags) => fs.open(filePath, flags));
+  const unlinkImpl = deps.unlinkImpl ?? ((filePath) => fs.unlink(filePath));
+  const statImpl = deps.statImpl ?? ((filePath) => fs.stat(filePath));
+  const delayImpl = deps.delayImpl ?? delay;
+  const lockPath = pathApi.join(queueDir, "_submit.lock");
+
   for (;;) {
     try {
-      const handle = await fs.open(lockPath, "wx");
+      const handle = await openImpl(lockPath, "wx");
       try {
         return await fn();
       } finally {
         await handle.close();
-        await fs.unlink(lockPath).catch(() => {});
+        await unlinkImpl(lockPath).catch(() => {});
       }
     } catch (error) {
-      if (error?.code !== "EEXIST") {
+      if (!["EEXIST", "EPERM", "EACCES"].includes(error?.code)) {
         throw error;
       }
       try {
-        const stats = await fs.stat(lockPath);
+        const stats = await statImpl(lockPath);
         if (Date.now() - stats.mtimeMs > SUBMISSION_LOCK_STALE_MS) {
-          await fs.unlink(lockPath).catch(() => {});
+          await unlinkImpl(lockPath).catch(() => {});
           continue;
         }
       } catch (statError) {
-        if (statError?.code === "ENOENT") {
+        if (["ENOENT", "EPERM", "EACCES"].includes(statError?.code)) {
           continue;
         }
         throw statError;
       }
-      await delay(5);
+      await delayImpl(5);
     }
   }
 }
@@ -469,6 +475,10 @@ export function createTaskFile({ id = `ocq_${randomUUID().replace(/-/g, "")}`, r
 export async function writeTaskFile(queueDir, task) {
   await ensureQueueDir(queueDir);
   await writeJson(taskPath(queueDir, task.id), task);
+}
+
+export async function lockSubmissionForTest(queueDir, fn, deps = {}) {
+  return withSubmissionLock(queueDir, fn, deps);
 }
 
 export async function readTaskFile(queueDir, taskId) {

@@ -1,6 +1,6 @@
 # Usage
 
-Use the advisor when you want a second review pass on the current Git state.
+Use the reviewer when you want a second pass on the current Git state. Use the planner when you already have a direction and want OpenCode to tighten it without taking over implementation.
 
 ## Typical Prompts
 
@@ -16,16 +16,25 @@ Let OpenCode review this diff. Focus on risks, missing tests, privacy issues, an
 Call ask_opencode_advisor for this repository and summarize the actionable findings.
 ```
 
+```text
+Ask opencode_planner to improve this plan. Focus on missing checks, better ordering, and scope control.
+```
+
 ## What The MCP Tool Does
 
-The tool:
+The reviewer/planner flow:
 
 1. Validates the requested repository and paths
-2. Collects Git status and diff context
-3. Runs `opencode run --agent codex-advisor`
-4. Returns structured JSON
+2. Collects Git status and optional diff context
+3. Runs either `opencode run --agent codex-advisor` or `opencode run --agent codex-planning-partner`
+4. Returns structured JSON immediately if the task finishes inline, or returns a queued/running pending state plus `task_id`
+5. Lets you poll `get_opencode_task` until a final result is ready
 
-The advisor is a reviewer only. It should not write files, execute shell commands, commit, or take over implementation.
+Role boundaries:
+
+- `ask_opencode_advisor`: reviewer only; it should not write files, execute shell commands, commit, or take over implementation
+- `ask_opencode_planner`: planning partner only; it should not decide the final plan, implement code, or expand scope on its own
+- `get_opencode_task`: task lookup for queued or running planner/reviewer jobs
 
 ## Privacy And Authorization
 
@@ -67,6 +76,29 @@ Known error codes:
 
 Public builds intentionally avoid echoing local absolute paths, allowed roots, resolved command paths, or raw process output in structured responses.
 
+## Queued And Running Results
+
+If the queue is busy, the ask tool may return:
+
+- `ok: false`
+- `error: "queued"`
+- `details.phase_pending: true`
+- `details.task_id`
+- `details.status` (`queued` or `running`)
+
+queued/running is pending, not failed. Keep that phase open and call `get_opencode_task` later with the returned `task_id`.
+
+Default queue policy:
+
+- global concurrency `4`
+- planner concurrency `2`
+- reviewer concurrency `2`
+- inline wait `60000ms`
+- retry hint `30000ms`
+- pending-task TTL `86400000ms`
+
+Queue files live under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
+
 ## Notes
 
 - Each review run creates an OpenCode session record
@@ -86,7 +118,7 @@ npm run doctor
 This doctor check is local-only. It depends on:
 
 - a working `opencode` command
-- a registered `codex-advisor` agent
+- registered `codex-advisor` and `codex-planning-partner` agents
 - a valid `OPENCODE_ADVISOR_ALLOWED_ROOTS` setting in the shell for the current repo
 
 Run it from the repository root in the same shell where `OPENCODE_ADVISOR_ALLOWED_ROOTS` is set. Doctor uses the same fallback and upstream diagnostic rules as the server, so quoted assistant text alone should not trip a fallback bucket.
@@ -98,7 +130,7 @@ It is not part of the GitHub CI gate and it does not imply that an npm package h
 Use the doctor bucket as the first triage hint:
 
 - `opencode_not_found`: OpenCode is missing from PATH or `OPENCODE_ADVISOR_OPENCODE_CMD` points to the wrong command
-- `agent_missing_or_fallback`: `codex-advisor` is missing or OpenCode fell back to another agent; reinstall `agents/codex-advisor.md` and check `opencode agent list`
+- `agent_missing_or_fallback`: one of the bundled agents is missing or OpenCode fell back to another agent; reinstall both bundled agent files and check `opencode agent list`
 - `invalid_cwd_or_allowed_roots`: the current repo is outside `OPENCODE_ADVISOR_ALLOWED_ROOTS`; narrow or correct that env var and rerun doctor from the repo root
 - `upstream_unavailable`: the configured OpenCode provider path is temporarily unavailable
 - `timeout`: the provider path did not answer before `OPENCODE_ADVISOR_TIMEOUT_MS`; if you raise the inner timeout, also raise outer MCP `tool_timeout_sec`

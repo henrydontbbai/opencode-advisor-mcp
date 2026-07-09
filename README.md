@@ -1,6 +1,6 @@
 # OpenCode Advisor MCP
 
-OpenCode Advisor MCP is an unofficial local MCP server that lets Codex ask a read-only OpenCode advisor for a second review pass on Git changes.
+OpenCode Advisor MCP is an unofficial local MCP server that lets Codex ask OpenCode for either a read-only review pass or a read-only planning pass without giving that helper write access.
 
 This project is for people who already use Codex and OpenCode locally and want a second review tool in the loop without giving that reviewer write access.
 
@@ -8,8 +8,8 @@ This project is for people who already use Codex and OpenCode locally and want a
 
 - Latest tagged GitHub release: `v0.2.0`
 - `main` includes unreleased stabilization changes after `v0.2.0`
-- Current scope: one MCP tool, `ask_opencode_advisor`
-- Supported mode: source/GitHub install with a local OpenCode agent template
+- Current scope: one MCP server with `ask_opencode_advisor`, `ask_opencode_planner`, and `get_opencode_task`
+- Supported mode: source/GitHub install with local OpenCode agent templates
 - npm package publication is planned for a future release and is not available yet
 
 ## Unofficial Compatibility Notice
@@ -22,7 +22,7 @@ Use this tool only on repositories and diffs you are authorized to inspect and d
 
 Important boundaries:
 
-- The tool sends Git status, Git diff context, your question, and working-directory context to your configured OpenCode runtime.
+- The server sends Git status, optional Git diff context, your question, plan text, constraints, and working-directory context to your configured OpenCode runtime.
 - Depending on your OpenCode configuration, that runtime may use a remote model provider. Do not assume this means "nothing ever leaves the machine."
 - The included advisor template blocks writes and denies `.env` reads, but that is not a complete confidentiality guarantee.
 - Keep `OPENCODE_ADVISOR_ALLOWED_ROOTS` narrow. Do not point it at broad parent directories unless you deliberately want that scope.
@@ -54,11 +54,12 @@ npm test
 npm run test:doctor
 ```
 
-Copy the bundled advisor template into your OpenCode agents directory:
+Copy the bundled agent templates into your OpenCode agents directory:
 
 ```powershell
 New-Item -ItemType Directory -Force -Path <agent-dir>
 Copy-Item -LiteralPath ".\agents\codex-advisor.md" -Destination "<agent-dir>\codex-advisor.md" -Force
+Copy-Item -LiteralPath ".\agents\codex-planning-partner.md" -Destination "<agent-dir>\codex-planning-partner.md" -Force
 ```
 
 Add this MCP config to Codex:
@@ -87,7 +88,7 @@ $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
 npm run doctor
 ```
 
-`npm run doctor` is a local source-install health check. It depends on your local OpenCode runtime, the bundled `codex-advisor` agent, and a valid `OPENCODE_ADVISOR_ALLOWED_ROOTS` value in the shell that launches it. It is not proof of npm publication.
+`npm run doctor` is a local source-install health check. It depends on your local OpenCode runtime, both bundled agents (`codex-advisor` and `codex-planning-partner`), and a valid `OPENCODE_ADVISOR_ALLOWED_ROOTS` value in the shell that launches it. It is not proof of npm publication.
 
 ## npm Package Status
 
@@ -95,10 +96,12 @@ The package metadata and CLI entrypoints are present for packaging checks, but `
 
 ## Usage
 
-Codex gets one MCP tool:
+Codex gets three MCP tools:
 
 ```text
 ask_opencode_advisor
+ask_opencode_planner
+get_opencode_task
 ```
 
 Typical prompt:
@@ -108,7 +111,24 @@ Ask opencode_advisor to review the current changes.
 Focus on risks, missing tests, privacy issues, and release readiness.
 ```
 
+```text
+Ask opencode_planner to tighten this implementation plan.
+Focus on gaps, ordering, scope creep, and validation points.
+```
+
+If planner or reviewer work does not finish inside the inline wait window, the ask tool returns a structured `queued` response. That means the OpenCode phase is still pending, not failed. Keep the stage open and call `get_opencode_task` with the returned `task_id`.
+
 The server returns structured JSON with stable error codes such as `invalid_cwd`, `invalid_paths`, `git_failed`, `opencode_not_found`, `opencode_failed`, and `timeout`.
+
+Queue defaults are conservative:
+
+- global concurrency: `4`
+- planner concurrency: `2`
+- reviewer concurrency: `2`
+- inline wait: `60000ms`
+- retry hint: `30000ms`
+
+Queue state is stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
 
 ## Local Verification
 
@@ -123,7 +143,7 @@ $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
 npm run doctor
 ```
 
-`npm run doctor` is an extra local runtime check for source installs. It is not part of the GitHub CI gate and it does not replace `npm run print-agent` or `npm pack --dry-run`.
+`npm run doctor` is an extra local runtime check for source installs. It is not part of the GitHub CI gate and it does not replace `npm run print-agent`, `npm run print-agent -- planner`, or `npm pack --dry-run`.
 
 Release and acceptance steps live in:
 

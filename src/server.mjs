@@ -1,395 +1,125 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
-  DEFAULT_MAX_DIFF_CHARS,
-  DEFAULT_TIMEOUT_MS,
-  createSuccessResponse,
-  outputHasAgentFallback,
-  pathForPlatform,
-  positiveNumber,
-  resolveOpencodeCommand,
-} from "./runtime-shared.mjs";
+  extractOpenCodeText,
+  isPathInsideAllowedRoots,
+  parseAllowedRoots,
+  preflightOpenCodeTask,
+  runOpenCodeAdvisorNow,
+  runOpenCodePlannerNow,
+  truncateText,
+} from "./opencode-core.mjs";
+import { createTaskQueue } from "./task-queue.mjs";
 
-const INVALID_CWD_MESSAGE = "cwd is outside configured allowed roots";
-const GIT_FAILED_MESSAGE = "Git context collection failed";
-const OPENCODE_NOT_FOUND_MESSAGE = "OpenCode command could not be started";
-
-export function parseAllowedRoots(input, env = process.env, pathApi = path) {
-  const source = input ?? env.OPENCODE_ADVISOR_ALLOWED_ROOTS ?? "";
-
-  return source
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => pathApi.resolve(entry));
-}
-
-export function isPathInsideAllowedRoots(candidate, allowedRoots = parseAllowedRoots(), pathApi = path) {
-  const resolved = pathApi.resolve(candidate);
-  const caseInsensitive = pathApi.sep === "\\";
-  const comparableResolved = caseInsensitive ? resolved.toLowerCase() : resolved;
-
-  return allowedRoots.some((root) => {
-    const rootResolved = pathApi.resolve(root);
-    const comparableRoot = caseInsensitive ? rootResolved.toLowerCase() : rootResolved;
-    const rootPrefix = comparableRoot.endsWith(pathApi.sep) ? comparableRoot : `${comparableRoot}${pathApi.sep}`;
-    return comparableResolved === comparableRoot || comparableResolved.startsWith(rootPrefix);
-  });
-}
-
-export function truncateText(text, maxChars) {
-  if (!Number.isFinite(maxChars) || maxChars <= 0 || text.length <= maxChars) {
-    return { text, truncated: false };
-  }
-
-  return {
-    text: `${text.slice(0, maxChars)}\n\n[truncated: ${text.length - maxChars} chars omitted]`,
-    truncated: true,
-  };
-}
-
-function stripModelReasoning(text) {
-  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
-
-  for (;;) {
-    const danglingMatch = /<think>/i.exec(cleaned);
-    if (!danglingMatch) {
-      return cleaned;
-    }
-
-    const start = danglingMatch.index;
-    const remainder = cleaned.slice(start);
-    const headingMatch = /(^|\r?\n)(#{1,6}\s)/m.exec(remainder);
-
-    if (!headingMatch) {
-      cleaned = cleaned.slice(0, start);
-      continue;
-    }
-
-    const headingOffset = headingMatch.index + headingMatch[0].length - headingMatch[2].length;
-    cleaned = `${cleaned.slice(0, start)}${remainder.slice(headingOffset)}`;
-  }
-}
-
-export function extractOpenCodeText(stdout) {
-  const textParts = [];
-  const fallbackLines = [];
-
-  for (const line of stdout.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    try {
-      const event = JSON.parse(trimmed);
-      if (typeof event?.part?.text === "string") {
-        textParts.push(event.part.text);
-      } else if (event?.type === "text" && typeof event?.text === "string") {
-        textParts.push(event.text);
-      }
-    } catch {
-      fallbackLines.push(line);
-    }
-  }
-
-  const text = textParts.length > 0 ? textParts.join("") : fallbackLines.join("\n").trim();
-  return stripModelReasoning(text).replace(/[ \t]{2,}/g, " ").trim();
-}
-
-
-function runProcess(command, args, { cwd, input = "", timeoutMs = 30000, env = process.env, platform = process.platform } = {}) {
-  return new Promise((resolve, reject) => {
-    const needsShell = platform === "win32" && /\.(cmd|bat)$/i.test(command);
-    const child = spawn(command, args, {
-      cwd,
-      env,
-      shell: needsShell,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
-    });
-
-    if (input) child.stdin.write(input);
-    child.stdin.end();
-  });
-}
-
-function normalizeReviewPaths(paths = [], pathApi = path) {
-  if (!Array.isArray(paths)) return [];
-
-  return paths
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
-    .map((entry) => {
-      if (entry.includes("\0")) throw new Error("paths must not contain NUL bytes");
-      if (entry.startsWith(":")) throw new Error("paths must be literal relative paths");
-      if (/[*?[\]]/.test(entry)) throw new Error("paths must be literal relative paths");
-      if (pathApi.isAbsolute(entry) || path.win32.isAbsolute(entry) || path.posix.isAbsolute(entry)) {
-        throw new Error("paths must be relative to cwd");
-      }
-      if (entry.split(/[\\/]+/).includes("..")) {
-        throw new Error("paths must not escape cwd");
-      }
-      const normalized = pathApi.normalize(entry);
-      if (normalized === ".." || normalized.startsWith(`..${pathApi.sep}`)) {
-        throw new Error("paths must not escape cwd");
-      }
-      return normalized;
-    });
-}
-
-function normalizeBaseRef(baseRef = "HEAD") {
-  const ref = String(baseRef || "HEAD");
-  if (ref.includes("\0") || /[\r\n]/.test(ref)) {
-    throw new Error("base_ref must not contain control characters");
-  }
-  if (ref.startsWith("-")) {
-    throw new Error("base_ref must not start with '-'");
-  }
-  if (ref.includes("..")) {
-    throw new Error("base_ref must name one ref, not a range");
-  }
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/@^~-]*$/.test(ref)) {
-    throw new Error("base_ref contains unsupported characters");
-  }
-  return ref;
-}
-
-async function runGit(cwd, args, deps) {
-  const result = await deps.runProcess("git", args, { cwd, timeoutMs: 30000, env: deps.env, platform: deps.platform });
-  if (result.timedOut) throw new Error(`git ${args.join(" ")} timed out`);
-  if (result.code !== 0) throw new Error(result.stderr || `git ${args.join(" ")} exited ${result.code}`);
-  return result.stdout.trim();
-}
-
-async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, paths, maxDiffChars, deps }) {
-  const safePaths = normalizeReviewPaths(paths, deps.path);
-  const pathspec = ["--", ...safePaths];
-  const status = includeStatus ? await runGit(cwd, ["status", "--short"], deps) : "";
-
-  if (!includeDiff) {
-    return { status, diff: "", diffTruncated: false };
-  }
-
-  const sections = [];
-  sections.push(`## git diff --stat ${baseRef}\n${await runGit(cwd, ["diff", "--stat", baseRef, ...pathspec], deps)}`);
-  sections.push(`## git diff ${baseRef}\n${await runGit(cwd, ["diff", baseRef, ...pathspec], deps)}`);
-  sections.push(`## git diff --cached --stat\n${await runGit(cwd, ["diff", "--cached", "--stat", ...pathspec], deps)}`);
-  sections.push(`## git diff --cached\n${await runGit(cwd, ["diff", "--cached", ...pathspec], deps)}`);
-
-  const maxChars = positiveNumber(maxDiffChars, DEFAULT_MAX_DIFF_CHARS);
-  const truncated = truncateText(sections.join("\n\n"), maxChars);
-  return { status, diff: truncated.text, diffTruncated: truncated.truncated };
-}
-
-function buildPrompt({ question, goal, cwd, status, diff, diffTruncated, paths }) {
-  return `## Codex -> OpenCode Advisor Review Request
-
-You are running as codex-advisor, a read-only reviewer. Do not modify files, run shell commands, launch subagents, or change project state.
-
-**Working directory:** ${cwd}
-**Goal:** ${goal || "(not provided)"}
-**Question:** ${question || "Review the current changes and provide a second-opinion code review."}
-**Requested paths:** ${paths?.length ? paths.join(", ") : "(all changed paths)"}
-**Diff truncated:** ${diffTruncated ? "yes" : "no"}
-
-**Git status:**
-\`\`\`
-${status || "(empty)"}
-\`\`\`
-
-**Git diff context:**
-\`\`\`diff
-${diff || "(empty)"}
-\`\`\`
-
-Return concise Markdown with these sections:
-1. Summary
-2. Risks
-3. Missed Tests
-4. Recommendations
-
-Reference specific files or diff hunks when possible. If context is insufficient, say exactly what is missing.`;
-}
-
-export async function askOpenCodeAdvisor(input = {}, deps = {}) {
-  const runtime = {
-    runProcess: deps.runProcess ?? runProcess,
+function getTaskQueue(deps = {}) {
+  return deps.taskQueue ?? createTaskQueue({
     env: deps.env ?? process.env,
     platform: deps.platform ?? process.platform,
-    existsSync: deps.existsSync ?? existsSync,
-  };
-  runtime.path = deps.path ?? pathForPlatform(runtime.platform);
-
-  const cwd = runtime.path.resolve(input.cwd || process.cwd());
-  const allowedRoots = parseAllowedRoots(undefined, runtime.env, runtime.path);
-  if (!isPathInsideAllowedRoots(cwd, allowedRoots, runtime.path)) {
-    return {
-      ok: false,
-      error: "invalid_cwd",
-      message: INVALID_CWD_MESSAGE,
-      details: {},
-    };
-  }
-
-  const includeStatus = input.include_status !== false;
-  const includeDiff = input.include_diff !== false;
-  let baseRef;
-  try {
-    baseRef = normalizeBaseRef(input.base_ref);
-  } catch (error) {
-    return {
-      ok: false,
-      error: "invalid_paths",
-      message: error.message,
-      details: {},
-    };
-  }
-  let paths;
-  try {
-    paths = normalizeReviewPaths(input.paths || [], runtime.path);
-  } catch (error) {
-    return {
-      ok: false,
-      error: "invalid_paths",
-      message: error.message,
-      details: {},
-    };
-  }
-  const timeoutMs = positiveNumber(runtime.env.OPENCODE_ADVISOR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
-  const maxDiffChars = positiveNumber(input.max_diff_chars ?? runtime.env.OPENCODE_ADVISOR_MAX_DIFF_CHARS, DEFAULT_MAX_DIFF_CHARS);
-
-  let context;
-  try {
-    context = await collectGitContext({ cwd, includeStatus, includeDiff, baseRef, paths, maxDiffChars, deps: runtime });
-  } catch (error) {
-    return {
-      ok: false,
-      error: "git_failed",
-      message: GIT_FAILED_MESSAGE,
-      details: {},
-    };
-  }
-
-  const prompt = buildPrompt({
-    question: input.question,
-    goal: input.goal,
-    cwd,
-    status: context.status,
-    diff: context.diff,
-    diffTruncated: context.diffTruncated,
-    paths,
   });
+}
 
-  const opencodeCommand = resolveOpencodeCommand(runtime.env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", {
-    env: runtime.env,
-    platform: runtime.platform,
-    exists: runtime.existsSync,
+export {
+  extractOpenCodeText,
+  isPathInsideAllowedRoots,
+  parseAllowedRoots,
+  truncateText,
+};
+
+export async function askOpenCodeAdvisor(input = {}, deps = {}) {
+  if (deps.useQueue === false) {
+    return runOpenCodeAdvisorNow(input, deps);
+  }
+
+  const preflight = preflightOpenCodeTask("reviewer", input, deps);
+  if (!preflight.ok) {
+    return preflight;
+  }
+
+  return getTaskQueue(deps).submitAndWait({
+    role: "reviewer",
+    input,
   });
-  let result;
-  try {
-    result = await runtime.runProcess(
-      opencodeCommand,
-      ["run", "--agent", "codex-advisor", "--dir", cwd, "--format", "json"],
-      { cwd, input: prompt, timeoutMs, env: runtime.env, platform: runtime.platform },
-    );
-  } catch (error) {
-    return {
-      ok: false,
-      error: "opencode_not_found",
-      message: OPENCODE_NOT_FOUND_MESSAGE,
-      details: {},
-    };
+}
+
+export async function askOpenCodePlanner(input = {}, deps = {}) {
+  if (deps.useQueue === false) {
+    return runOpenCodePlannerNow(input, deps);
   }
 
-  if (outputHasAgentFallback(result.stdout, result.stderr)) {
-    return {
-      ok: false,
-      error: "opencode_failed",
-      message: "OpenCode could not find codex-advisor and attempted to fall back to the default agent.",
-      details: {},
-    };
+  const preflight = preflightOpenCodeTask("planner", input, deps);
+  if (!preflight.ok) {
+    return preflight;
   }
 
-  if (result.timedOut) {
-    return {
-      ok: false,
-      error: "timeout",
-      message: `OpenCode advisor timed out after ${timeoutMs}ms`,
-      details: {},
-    };
-  }
+  return getTaskQueue(deps).submitAndWait({
+    role: "planner",
+    input,
+  });
+}
 
-  if (result.code !== 0) {
-    return {
-      ok: false,
-      error: "opencode_failed",
-      message: `OpenCode exited with code ${result.code}`,
-      details: {},
-    };
-  }
-
-  return createSuccessResponse({
-    baseRef,
-    status: context.status,
-    diffTruncated: context.diffTruncated,
-    advisorText: extractOpenCodeText(result.stdout),
-    opencodeExitCode: result.code,
+export function getOpenCodeTask(input = {}, deps = {}) {
+  return getTaskQueue(deps).getTaskResult({
+    task_id: input.task_id,
   });
 }
 
 export function createServer(deps = {}) {
   const server = new McpServer({ name: "opencode-advisor", version: "0.2.0" });
 
+  const commonInput = {
+    cwd: z.string().optional(),
+    question: z.string().optional(),
+    goal: z.string().optional(),
+    paths: z.array(z.string()).optional(),
+    include_diff: z.boolean().optional(),
+    include_status: z.boolean().optional(),
+    base_ref: z.string().optional(),
+    max_diff_chars: z.number().int().positive().optional(),
+  };
+
   server.registerTool(
     "ask_opencode_advisor",
     {
       title: "Ask OpenCode Advisor",
       description: "Ask the local read-only OpenCode codex-advisor agent to review current git changes.",
+      inputSchema: commonInput,
+    },
+    async (input) => ({
+      content: [{ type: "text", text: JSON.stringify(await askOpenCodeAdvisor(input, deps), null, 2) }],
+    }),
+  );
+
+  server.registerTool(
+    "ask_opencode_planner",
+    {
+      title: "Ask OpenCode Planner",
+      description: "Ask the local read-only OpenCode planning partner to improve a plan without taking over implementation.",
       inputSchema: {
-        cwd: z.string().optional(),
-        question: z.string().optional(),
-        goal: z.string().optional(),
-        paths: z.array(z.string()).optional(),
-        include_diff: z.boolean().optional(),
-        include_status: z.boolean().optional(),
-        base_ref: z.string().optional(),
-        max_diff_chars: z.number().int().positive().optional(),
+        ...commonInput,
+        current_plan: z.string().optional(),
+        constraints: z.array(z.string()).optional(),
       },
     },
-    async (input) => {
-      const result = await askOpenCodeAdvisor(input, deps);
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      };
+    async (input) => ({
+      content: [{ type: "text", text: JSON.stringify(await askOpenCodePlanner(input, deps), null, 2) }],
+    }),
+  );
+
+  server.registerTool(
+    "get_opencode_task",
+    {
+      title: "Get OpenCode Task",
+      description: "Check whether a queued or running OpenCode planner/reviewer task has finished.",
+      inputSchema: {
+        task_id: z.string(),
+      },
     },
+    async (input) => ({
+      content: [{ type: "text", text: JSON.stringify(await getOpenCodeTask(input, deps), null, 2) }],
+    }),
   );
 
   return server;

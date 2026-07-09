@@ -16,6 +16,10 @@ import {
 
 const FORBIDDEN_SUCCESS_KEYS = new Set(["cwd", "stderr_tail", "stdout_tail", "allowed_roots"]);
 const ALLOWED_SUCCESS_KEYS = new Set(SUCCESS_RESPONSE_KEYS);
+const DIRECT_AGENT_CHECKS = [
+  { agentName: "codex-advisor", label: "Direct OpenCode review agent check" },
+  { agentName: "codex-planning-partner", label: "Direct OpenCode planning agent check" },
+];
 
 function runCommand(command, args, { cwd, env = process.env, platform = process.platform, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
@@ -88,7 +92,7 @@ function guidanceForBucket(bucket) {
     case "opencode_not_found":
       return "Confirm OpenCode is installed and OPENCODE_ADVISOR_OPENCODE_CMD points to a valid command.";
     case "agent_missing_or_fallback":
-      return "Reinstall the bundled codex-advisor agent template and confirm `opencode agent list` shows `codex-advisor (primary)`.";
+      return "Reinstall the bundled `codex-advisor` and `codex-planning-partner` agent templates, then confirm `opencode agent list` shows both agents.";
     case "invalid_cwd_or_allowed_roots":
       return "Set OPENCODE_ADVISOR_ALLOWED_ROOTS to the current repo or a narrow parent directory, then rerun doctor from the repo root.";
     case "upstream_unavailable":
@@ -118,6 +122,104 @@ export function formatDoctorReport(report) {
   return lines.join("\n");
 }
 
+async function runDirectAgentCheck({
+  opencodeCommand,
+  agentName,
+  label,
+  cwd,
+  env,
+  platform,
+  timeoutMs,
+  runCommandImpl,
+}) {
+  let directResult;
+  try {
+    directResult = await runCommandImpl(
+      opencodeCommand,
+      ["run", "--agent", agentName, "--format", "json", "Say OK only."],
+      { cwd, env, platform, timeoutMs },
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      bucket: classifySpawnError(error),
+      step: {
+        id: agentName,
+        label,
+        ok: false,
+        detail: error.message,
+      },
+      summary: error.message,
+    };
+  }
+
+  if (directResult.timedOut) {
+    return {
+      ok: false,
+      bucket: "timeout",
+      step: {
+        id: agentName,
+        label,
+        ok: false,
+        detail: `timed out after ${timeoutMs}ms`,
+      },
+      summary: `${label} timed out`,
+    };
+  }
+
+  if (outputHasAgentFallback(directResult.stdout, directResult.stderr)) {
+    return {
+      ok: false,
+      bucket: "agent_missing_or_fallback",
+      step: {
+        id: agentName,
+        label,
+        ok: false,
+        detail: `${agentName} missing or fallback detected`,
+      },
+      summary: `Fallback detected during ${label}`,
+    };
+  }
+
+  if (outputHasUpstreamUnavailable(directResult.stdout, directResult.stderr)) {
+    return {
+      ok: false,
+      bucket: "upstream_unavailable",
+      step: {
+        id: agentName,
+        label,
+        ok: false,
+        detail: "upstream service temporarily unavailable",
+      },
+      summary: "Upstream service temporarily unavailable",
+    };
+  }
+
+  if (directResult.code !== 0) {
+    return {
+      ok: false,
+      bucket: "generic_opencode_failure",
+      step: {
+        id: agentName,
+        label,
+        ok: false,
+        detail: `exit code ${directResult.code}`,
+      },
+      summary: `${label} failed with code ${directResult.code}`,
+    };
+  }
+
+  return {
+    ok: true,
+    step: {
+      id: agentName,
+      label,
+      ok: true,
+      detail: extractOpenCodeText(directResult.stdout) || `${agentName} responded`,
+    },
+  };
+}
+
 export async function runDoctor({
   cwd = process.cwd(),
   env = process.env,
@@ -130,71 +232,21 @@ export async function runDoctor({
   const steps = [];
   const opencodeCommand = resolveOpencodeCommand(env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", { env, platform, exists });
 
-  let directResult;
-  try {
-    directResult = await runCommandImpl(
+  for (const directCheck of DIRECT_AGENT_CHECKS) {
+    const result = await runDirectAgentCheck({
       opencodeCommand,
-      ["run", "--agent", "codex-advisor", "--format", "json", "Say OK only."],
-      { cwd, env, platform, timeoutMs },
-    );
-  } catch (error) {
-    const bucket = classifySpawnError(error);
-    steps.push({
-      id: "agent",
-      label: "Direct OpenCode agent check",
-      ok: false,
-      detail: error.message,
+      cwd,
+      env,
+      platform,
+      timeoutMs,
+      runCommandImpl,
+      ...directCheck,
     });
-    return buildFailureReport(bucket, steps, error.message);
+    steps.push(result.step);
+    if (!result.ok) {
+      return buildFailureReport(result.bucket, steps, result.summary);
+    }
   }
-
-  if (directResult.timedOut) {
-    steps.push({
-      id: "agent",
-      label: "Direct OpenCode agent check",
-      ok: false,
-      detail: `timed out after ${timeoutMs}ms`,
-    });
-    return buildFailureReport("timeout", steps, "Direct OpenCode agent check timed out");
-  }
-
-  if (outputHasAgentFallback(directResult.stdout, directResult.stderr)) {
-    steps.push({
-      id: "agent",
-      label: "Direct OpenCode agent check",
-      ok: false,
-      detail: "codex-advisor missing or fallback detected",
-    });
-    return buildFailureReport("agent_missing_or_fallback", steps, "Fallback detected during direct OpenCode agent check");
-  }
-
-  if (outputHasUpstreamUnavailable(directResult.stdout, directResult.stderr)) {
-    steps.push({
-      id: "agent",
-      label: "Direct OpenCode agent check",
-      ok: false,
-      detail: "upstream service temporarily unavailable",
-    });
-    return buildFailureReport("upstream_unavailable", steps, "Upstream service temporarily unavailable");
-  }
-
-  if (directResult.code !== 0) {
-    steps.push({
-      id: "agent",
-      label: "Direct OpenCode agent check",
-      ok: false,
-      detail: `exit code ${directResult.code}`,
-    });
-    return buildFailureReport("generic_opencode_failure", steps, `Direct OpenCode agent check failed with code ${directResult.code}`);
-  }
-
-  const directText = extractOpenCodeText(directResult.stdout);
-  steps.push({
-    id: "agent",
-    label: "Direct OpenCode agent check",
-    ok: true,
-    detail: directText || "agent responded",
-  });
 
   const healthResult = await askOpenCodeAdvisorImpl(
     {
@@ -205,6 +257,7 @@ export async function runDoctor({
     {
       env,
       platform,
+      useQueue: false,
     },
   );
 

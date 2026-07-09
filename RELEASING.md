@@ -21,7 +21,8 @@ npm pack --dry-run
 Also verify:
 
 - the tarball contains only intended files
-- `npm run print-agent` prints the bundled template
+- `npm run print-agent` prints the advisor template
+- `npm run print-agent -- planner` prints the planner template
 - a packed install works in a fresh temp directory
 - for source installs, `npm run doctor` passes from the repo root in the same shell where `OPENCODE_ADVISOR_ALLOWED_ROOTS` is set
 
@@ -53,6 +54,7 @@ Run one final OpenCode read-only review focused on:
 
 - privacy and disclosure boundaries
 - packaging contents
+- queued/running semantics staying explicit and non-destructive
 - release readiness
 
 ## GitHub Release

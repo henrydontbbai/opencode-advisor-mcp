@@ -35,6 +35,7 @@ function runNpmJson(args) {
 }
 
 test("default npm test excludes doctor-specific test coverage", () => {
+  assert.match(packageJson.scripts.test, /--test-force-exit/);
   assert.match(packageJson.scripts.test, /test\/server\.test\.mjs/);
   assert.match(packageJson.scripts.test, /test\/runtime-shared\.test\.mjs/);
   assert.match(packageJson.scripts.test, /test\/package-contract\.test\.mjs/);

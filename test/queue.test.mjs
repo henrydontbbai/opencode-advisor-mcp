@@ -25,6 +25,33 @@ test("getQueueConfig uses 4/2/2 defaults", () => {
   assert.equal(config.maxPending, 16);
 });
 
+test("getQueueConfig keeps stale thresholds at or above the default floor when timeout is reduced", () => {
+  const config = getQueueConfig(
+    {
+      OPENCODE_ADVISOR_TIMEOUT_MS: "1000",
+    },
+    process.platform,
+  );
+
+  assert.equal(config.timeoutMs, 1000);
+  assert.equal(config.runnerStaleMs, 420000);
+  assert.equal(config.runningStaleMs, 420000);
+});
+
+test("getQueueConfig still honors explicit stale threshold overrides", () => {
+  const config = getQueueConfig(
+    {
+      OPENCODE_ADVISOR_TIMEOUT_MS: "1000",
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "500000",
+      OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "700000",
+    },
+    process.platform,
+  );
+
+  assert.equal(config.runnerStaleMs, 500000);
+  assert.equal(config.runningStaleMs, 700000);
+});
+
 test("getQueueConfig treats OPENCODE_ADVISOR_QUEUE_DIR as the direct queue directory", () => {
   const queueDir = path.join(os.tmpdir(), "ocq-direct");
   const config = getQueueConfig(
@@ -385,6 +412,23 @@ test("createTaskQueue returns queue_full without spawning the runner", async () 
   assert.equal(result.details.status, "queue_full");
   assert.equal(result.details.max_pending, 2);
   assert.equal(spawnCalled, false);
+});
+
+test("createTaskQueue returns a structured error when the queue directory cannot be created", async () => {
+  const failingQueue = createTaskQueue({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: process.platform === "win32" ? "Z:\\__definitely_missing_perm__\\queue" : "/proc/1/queue",
+    },
+    platform: process.platform,
+    spawnProcess: () => {
+      throw new Error("should not spawn");
+    },
+  });
+
+  const result = await failingQueue.submitAndWait({ role: "planner", input: { current_plan: "blocked" } });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "opencode_failed");
+  assert.match(result.message, /queue directory is unavailable/i);
 });
 
 test("createTaskQueue enforces maxPending atomically across concurrent submissions", async () => {

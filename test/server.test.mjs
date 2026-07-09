@@ -6,6 +6,7 @@ import {
   askOpenCodePlanner,
   createServer,
   extractOpenCodeText,
+  getOpenCodeTask,
   isPathInsideAllowedRoots,
   parseAllowedRoots,
   truncateText,
@@ -752,6 +753,22 @@ test("getOpenCodeTask returns completed planner results from the task queue", as
   const taskResult = JSON.parse(taskResponse.content[0].text);
   assert.equal(taskResult.ok, true);
   assert.equal(taskResult.planner_text, "Tighten validation points.");
+});
+
+test("getOpenCodeTask returns a stable failure when queue mode is disabled", async () => {
+  const result = await getOpenCodeTask(
+    { task_id: "ocq_disabledqueue" },
+    {
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+      platform: "win32",
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "opencode_failed");
+  assert.match(result.message, /queue mode is disabled/i);
+  assert.deepEqual(result.details, {});
 });
 
 test("createServer registers planner, advisor, and task tools with injected dependencies", async () => {

@@ -61,6 +61,15 @@ export async function askOpenCodePlanner(input = {}, deps = {}) {
 }
 
 export function getOpenCodeTask(input = {}, deps = {}) {
+  if (deps.useQueue === false) {
+    return {
+      ok: false,
+      error: "opencode_failed",
+      message: "OpenCode task lookup is unavailable when queue mode is disabled.",
+      details: {},
+    };
+  }
+
   return getTaskQueue(deps).getTaskResult({
     task_id: input.task_id,
   });

@@ -723,6 +723,8 @@ export async function runQueueRunner({
 
     return { started: true };
   } finally {
+    signals?.off?.("SIGTERM", stop);
+    signals?.off?.("SIGINT", stop);
     await releaseRunnerLock(config.queueDir);
   }
 }

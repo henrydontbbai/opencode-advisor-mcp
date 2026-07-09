@@ -663,6 +663,53 @@ test("runQueueRunner exits promptly after SIGTERM once the current task finishes
   assert.equal(slept, false);
 });
 
+test("runQueueRunner removes signal handlers after shutdown", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const task = createTaskFile({
+    id: "ocq_signalcleanup",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "cleanup" },
+  });
+  await writeTaskFile(queueDir, task);
+
+  const handlers = new Map();
+  const removed = [];
+  const signals = {
+    on(signal, handler) {
+      handlers.set(signal, handler);
+    },
+    off(signal, handler) {
+      removed.push(signal);
+      assert.equal(handlers.get(signal), handler);
+      handlers.delete(signal);
+    },
+  };
+
+  await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "600000",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    signals,
+    runTask: async () => {
+      handlers.get("SIGTERM")?.();
+      return {
+        ok: true,
+        base_ref: "HEAD",
+        status: "",
+        diff_truncated: false,
+        planner_text: "done",
+        opencode_exit_code: 0,
+      };
+    },
+  });
+
+  assert.deepEqual(removed.sort(), ["SIGINT", "SIGTERM"]);
+  assert.equal(handlers.size, 0);
+});
+
 test("createTaskQueue tolerates malformed runner state files", async () => {
   const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
   writeFileSync(path.join(queueDir, "_runner.json"), "", "utf8");

@@ -415,9 +415,13 @@ test("createTaskQueue returns queue_full without spawning the runner", async () 
 });
 
 test("createTaskQueue returns a structured error when the queue directory cannot be created", async () => {
+  const baseDir = mkdtempSync(path.join(os.tmpdir(), "ocq-unavailable-"));
+  const occupiedPath = path.join(baseDir, "occupied");
+  writeFileSync(occupiedPath, "not a directory\n", "utf8");
+
   const failingQueue = createTaskQueue({
     env: {
-      OPENCODE_ADVISOR_QUEUE_DIR: process.platform === "win32" ? "Z:\\__definitely_missing_perm__\\queue" : "/proc/1/queue",
+      OPENCODE_ADVISOR_QUEUE_DIR: path.join(occupiedPath, "queue"),
     },
     platform: process.platform,
     spawnProcess: () => {

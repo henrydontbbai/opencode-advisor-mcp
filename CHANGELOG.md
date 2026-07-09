@@ -12,6 +12,11 @@
 - aligned public security-reporting docs with GitHub private vulnerability reporting
 - clarified source/GitHub install as the current path while npm publication remains future work
 - hardened queued task polling so completed/expired/queue-full results stay stable without unnecessary runner restarts, and changed `OPENCODE_ADVISOR_QUEUE_DIR` to act as a direct queue directory override
+- added issue-governance triage tracking in `ISSUES_SUMMARY.md` and closed obvious covered/duplicate backlog items
+- made queue-directory setup failures return structured errors instead of looking like MCP disconnects
+- prevented stale queue thresholds from shrinking below the built-in floor when only the OpenCode timeout is reduced
+- aligned `get_opencode_task` with disabled-queue semantics, expanded doctor to validate planner MCP health, and upgraded package-contract tests to inspect the real tarball plus root lockfile metadata
+- added Bash/macOS/Linux-oriented install examples and explicit OpenCode CLI prerequisite/version notes
 
 ## 0.2.0
 

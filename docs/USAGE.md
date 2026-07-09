@@ -118,6 +118,7 @@ Queue files live under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows 
 If you set `OPENCODE_ADVISOR_QUEUE_DIR`, that value is used as the queue directory directly.
 If you set `OPENCODE_ADVISOR_QUEUE_LOG_DIR`, detached runner stdout/stderr is captured there for local diagnosis.
 If a task ages out, the expired status is not timeout: it means the queued/running task is no longer recoverable and should be treated as a stale local queue record instead of an in-flight OpenCode timeout.
+If the queue directory cannot be created or written, the ask/get-task flow should return a structured queue-directory failure instead of behaving like a silent MCP disconnect.
 
 ## Notes
 
@@ -138,6 +139,7 @@ npm run doctor
 This doctor check is local-only. It depends on:
 
 - a working `opencode` command
+- a recent OpenCode CLI (currently validated with `1.17.13`)
 - registered `codex-advisor` and `codex-planning-partner` agents
 - a valid `OPENCODE_ADVISOR_ALLOWED_ROOTS` setting in the shell for the current repo
 

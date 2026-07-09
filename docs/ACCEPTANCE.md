@@ -134,6 +134,7 @@ Expected:
 - success response does not expose an absolute local `cwd`
 - success response does not expose raw stderr tail
 - if diff context includes obvious token-like values, the prompt path should redact them before provider handoff
+- if the queue directory is unwritable, the response should fail structurally instead of looking like a broken MCP connection
 
 Planner path:
 
@@ -162,6 +163,12 @@ OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS
 OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS
 OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS
 OPENCODE_ADVISOR_QUEUE_POLL_MS
+```
+
+Stale-threshold guardrail to keep documented and testable:
+
+```text
+Lowering OPENCODE_ADVISOR_TIMEOUT_MS alone should not shrink stale detection below the built-in safety floor unless the stale env vars are explicitly overridden.
 ```
 
 Manual queued-path poll:

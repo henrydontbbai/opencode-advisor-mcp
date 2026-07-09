@@ -1,8 +1,9 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import {
   askOpenCodeAdvisor,
+  askOpenCodePlanner,
   createServer,
   extractOpenCodeText,
   isPathInsideAllowedRoots,
@@ -282,6 +283,7 @@ test("askOpenCodeAdvisor returns advisor text on mocked success path", async () 
       runProcess,
       env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
       platform: "win32",
+      useQueue: false,
     },
   );
 
@@ -303,6 +305,45 @@ test("askOpenCodeAdvisor returns advisor text on mocked success path", async () 
   );
 });
 
+test("askOpenCodePlanner defaults to status-only context and returns planner text", async () => {
+  const { runProcess, calls } = createMockRunProcess({
+    git: {
+      "status --short": { code: 0, stdout: " M docs/plan.md\n", stderr: "", timedOut: false },
+    },
+    opencode: {
+      code: 0,
+      stdout: JSON.stringify({ type: "text", part: { text: "Tighten scope and add validation." } }),
+      stderr: "",
+      timedOut: false,
+    },
+  });
+
+  const result = await askOpenCodePlanner(
+    {
+      cwd: WINDOWS_CHILD_REPO,
+      goal: "Refine next-step plan",
+      question: "What is missing?",
+      current_plan: "1. Add queue\n2. Add planner tool",
+      constraints: ["Keep one MCP", "Do not add second MCP"],
+    },
+    {
+      runProcess,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+      platform: "win32",
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.planner_text, "Tighten scope and add validation.");
+  assert.equal(result.status, "M docs/plan.md");
+  assert.equal(result.diff_truncated, false);
+  assert.deepEqual(
+    calls.filter((call) => call.command === "git").map((call) => call.args),
+    [["status", "--short"]],
+  );
+});
+
 test("askOpenCodeAdvisor skips git commands when status and diff are disabled", async () => {
   const { runProcess, calls } = createMockRunProcess();
 
@@ -316,6 +357,7 @@ test("askOpenCodeAdvisor skips git commands when status and diff are disabled", 
       runProcess,
       env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
       platform: "win32",
+      useQueue: false,
     },
   );
 
@@ -336,6 +378,7 @@ test("askOpenCodeAdvisor falls back to default timeout for invalid timeout env",
       runProcess,
       env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT, OPENCODE_ADVISOR_TIMEOUT_MS: "not-a-number" },
       platform: "win32",
+      useQueue: false,
     },
   );
 
@@ -361,6 +404,7 @@ test("askOpenCodeAdvisor applies max diff chars from env", async () => {
       runProcess,
       env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo", OPENCODE_ADVISOR_MAX_DIFF_CHARS: "12" },
       platform: "linux",
+      useQueue: false,
     },
   );
 
@@ -377,7 +421,7 @@ test("askOpenCodeAdvisor returns git_failed when git command fails", async () =>
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", useQueue: false },
   );
 
   assert.equal(result.ok, false);
@@ -393,7 +437,7 @@ test("askOpenCodeAdvisor returns opencode_not_found when process spawn fails", a
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", useQueue: false },
   );
 
   assert.equal(result.ok, false);
@@ -413,6 +457,7 @@ test("askOpenCodeAdvisor returns timeout when opencode times out", async () => {
       runProcess,
       env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT, OPENCODE_ADVISOR_TIMEOUT_MS: "10" },
       platform: "win32",
+      useQueue: false,
     },
   );
 
@@ -429,7 +474,7 @@ test("askOpenCodeAdvisor returns opencode_failed for nonzero exit", async () => 
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", useQueue: false },
   );
 
   assert.equal(result.ok, false);
@@ -453,7 +498,7 @@ test("askOpenCodeAdvisor does not treat advisor text mentioning fallback as agen
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", useQueue: false },
   );
 
   assert.equal(result.ok, true);
@@ -472,7 +517,7 @@ test("askOpenCodeAdvisor detects agent fallback in structured diagnostics", asyn
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", useQueue: false },
   );
 
   assert.equal(result.ok, false);
@@ -492,7 +537,7 @@ test("askOpenCodeAdvisor detects agent fallback in structured stderr diagnostics
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", useQueue: false },
   );
 
   assert.equal(result.ok, false);
@@ -512,7 +557,7 @@ test("askOpenCodeAdvisor detects actual agent fallback in non-json process outpu
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", useQueue: false },
   );
 
   assert.equal(result.ok, false);
@@ -532,7 +577,7 @@ test("askOpenCodeAdvisor ignores fallback phrases inside top-level assistant tex
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", useQueue: false },
   );
 
   assert.equal(result.ok, true);
@@ -564,31 +609,120 @@ test("askOpenCodeAdvisor ignores fallback phrases inside tool output events", as
 
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
-    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32" },
+    { runProcess, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", useQueue: false },
   );
 
   assert.equal(result.ok, true);
   assert.equal(result.advisor_text, "Looks consistent");
 });
 
-test("createServer registers advisor tool with injected dependencies", async () => {
+test("askOpenCodeAdvisor returns queued result when task stays pending", async () => {
+  const taskQueue = {
+    submitAndWait: async () => ({
+      ok: false,
+      error: "queued",
+      message: "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.",
+      details: {
+        task_id: "ocq_test",
+        role: "reviewer",
+        status: "queued",
+        phase_pending: true,
+        retry_after_ms: 30000,
+        position: 2,
+        limit_global: 4,
+        limit_role: 2,
+      },
+    }),
+  };
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: WINDOWS_CHILD_REPO },
+    {
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+      platform: "win32",
+      taskQueue,
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "queued");
+  assert.equal(result.details.phase_pending, true);
+  assert.equal(result.details.role, "reviewer");
+});
+
+test("createServer registers planner, advisor, and task tools with injected dependencies", async () => {
   const { runProcess } = createMockRunProcess();
+  const taskQueue = {
+    submitAndWait: async (task) => {
+      if (task.role === "planner") {
+        return {
+          ok: true,
+          base_ref: "HEAD",
+          status: "",
+          diff_truncated: false,
+          planner_text: "Planner OK",
+          opencode_exit_code: 0,
+        };
+      }
+      return {
+        ok: true,
+        base_ref: "HEAD",
+        status: "",
+        diff_truncated: false,
+        advisor_text: "Advisor OK",
+        opencode_exit_code: 0,
+      };
+    },
+    getTaskResult: async () => ({
+      ok: false,
+      error: "queued",
+      message: "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.",
+      details: {
+        task_id: "ocq_test",
+        role: "planner",
+        status: "queued",
+        phase_pending: true,
+        retry_after_ms: 30000,
+        position: 1,
+        limit_global: 4,
+        limit_role: 2,
+      },
+    }),
+  };
+
   const server = createServer({
     runProcess,
     env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
     platform: "win32",
+    taskQueue,
   });
 
-  assert.deepEqual(Object.keys(server._registeredTools), ["ask_opencode_advisor"]);
+  assert.deepEqual(
+    Object.keys(server._registeredTools),
+    ["ask_opencode_advisor", "ask_opencode_planner", "get_opencode_task"],
+  );
 
-  const response = await server._registeredTools.ask_opencode_advisor.handler({
+  const advisorResponse = await server._registeredTools.ask_opencode_advisor.handler({
     cwd: WINDOWS_CHILD_REPO,
     include_diff: false,
     include_status: false,
   });
-  const result = JSON.parse(response.content[0].text);
+  const advisorResult = JSON.parse(advisorResponse.content[0].text);
+  assert.equal(advisorResult.ok, true);
+  assert.equal(advisorResult.advisor_text, "Advisor OK");
 
-  assert.equal(result.ok, true);
-  assert.equal(result.advisor_text, "Advisor OK");
-  assert.equal("cwd" in result, false);
+  const plannerResponse = await server._registeredTools.ask_opencode_planner.handler({
+    cwd: WINDOWS_CHILD_REPO,
+    current_plan: "1. Queue\n2. Review",
+  });
+  const plannerResult = JSON.parse(plannerResponse.content[0].text);
+  assert.equal(plannerResult.ok, true);
+  assert.equal(plannerResult.planner_text, "Planner OK");
+
+  const taskResponse = await server._registeredTools.get_opencode_task.handler({
+    task_id: "ocq_test",
+  });
+  const taskResult = JSON.parse(taskResponse.content[0].text);
+  assert.equal(taskResult.error, "queued");
+  assert.equal(taskResult.details.task_id, "ocq_test");
 });

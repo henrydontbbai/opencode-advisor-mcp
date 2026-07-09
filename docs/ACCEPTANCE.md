@@ -29,6 +29,7 @@ npm run doctor
 Expected:
 
 - the direct `codex-advisor` agent check passes
+- the direct `codex-planning-partner` agent check passes
 - the local `askOpenCodeAdvisor({ include_diff:false, include_status:false })` health check passes
 - the summary does not report forbidden fields such as `cwd`, `stderr_tail`, `stdout_tail`, or `allowed_roots`
 
@@ -59,9 +60,13 @@ Check the installed CLI behavior:
 
 ```powershell
 npm run print-agent
+npm run print-agent -- planner
 ```
 
-Expected: prints the bundled `codex-advisor.md` template.
+Expected:
+
+- default print command prints the bundled `codex-advisor.md` template
+- planner print command prints the bundled `codex-planning-partner.md` template
 
 ## Local Tarball Install Check
 
@@ -85,12 +90,13 @@ Expected:
 ```powershell
 opencode agent list
 opencode run --agent codex-advisor --format json "Say OK only."
+opencode run --agent codex-planning-partner --format json "Say OK only."
 ```
 
 Expected:
 
-- `codex-advisor (primary)` appears
-- the direct run completes
+- both bundled agents appear
+- each direct run completes
 - output does not include a fallback such as `agent "codex-advisor" not found`
 
 ## Read-Only Negative Test
@@ -127,6 +133,24 @@ Expected:
 - `ok: true`
 - success response does not expose an absolute local `cwd`
 - success response does not expose raw stderr tail
+
+Planner path:
+
+```powershell
+node -e "import('./src/server.mjs').then(async ({ askOpenCodePlanner }) => { const r = await askOpenCodePlanner({ cwd: process.cwd(), current_plan: '1. Validate config\\n2. Run doctor' }, { useQueue: false }); console.log(JSON.stringify(r, null, 2)); })"
+```
+
+Expected:
+
+- `ok: true`
+- response contains `planner_text`
+- response does not expose an absolute local `cwd`
+
+Queued path:
+
+```text
+If an ask tool returns { ok:false, error:"queued" }, keep the phase pending and call get_opencode_task with the returned task_id.
+```
 
 Invalid cwd:
 

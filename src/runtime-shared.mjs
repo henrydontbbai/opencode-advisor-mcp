@@ -4,7 +4,7 @@ import path from "node:path";
 export const DEFAULT_MAX_DIFF_CHARS = 60000;
 export const DEFAULT_TIMEOUT_MS = 300000;
 
-const AGENT_FALLBACK_PATTERN = /agent "codex-advisor" not found|Falling back to default agent/i;
+const AGENT_FALLBACK_PATTERN = /agent "(codex-advisor|codex-planning-partner)" not found|Falling back to default agent/i;
 const UPSTREAM_UNAVAILABLE_PATTERN = /upstream service temporarily unavailable|service temporarily unavailable/i;
 const DIAGNOSTIC_FIELDS = ["message", "error", "stderr", "stdout", "detail", "details", "reason"];
 
@@ -14,6 +14,15 @@ export const SUCCESS_RESPONSE_KEYS = Object.freeze([
   "status",
   "diff_truncated",
   "advisor_text",
+  "opencode_exit_code",
+]);
+
+export const PLANNER_SUCCESS_RESPONSE_KEYS = Object.freeze([
+  "ok",
+  "base_ref",
+  "status",
+  "diff_truncated",
+  "planner_text",
   "opencode_exit_code",
 ]);
 
@@ -30,6 +39,23 @@ export function createSuccessResponse({
     status,
     diff_truncated: diffTruncated,
     advisor_text: advisorText,
+    opencode_exit_code: opencodeExitCode,
+  };
+}
+
+export function createPlannerSuccessResponse({
+  baseRef,
+  status,
+  diffTruncated,
+  plannerText,
+  opencodeExitCode,
+}) {
+  return {
+    ok: true,
+    base_ref: baseRef,
+    status,
+    diff_truncated: diffTruncated,
+    planner_text: plannerText,
     opencode_exit_code: opencodeExitCode,
   };
 }

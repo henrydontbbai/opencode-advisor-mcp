@@ -57,6 +57,11 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
       args: ["run", "--agent", "codex-advisor", "--format", "json", "Say OK only."],
       options: { cwd: WINDOWS_CHILD_REPO, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", timeoutMs: 300000 },
     },
+    {
+      command: "opencode",
+      args: ["run", "--agent", "codex-planning-partner", "--format", "json", "Say OK only."],
+      options: { cwd: WINDOWS_CHILD_REPO, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", timeoutMs: 300000 },
+    },
   ]);
   assert.deepEqual(advisorInput, {
     cwd: WINDOWS_CHILD_REPO,
@@ -66,6 +71,7 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
   assert.deepEqual(advisorDeps, {
     env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
     platform: "win32",
+    useQueue: false,
   });
   assert.equal(report.steps.every((step) => step.ok), true);
 });
@@ -88,13 +94,41 @@ test("runDoctor classifies missing opencode command", async () => {
 });
 
 test("runDoctor classifies agent fallback from direct OpenCode output", async () => {
+  let directCalls = 0;
   const report = await runDoctor({
     cwd: "/repo",
     env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
-    runCommand: async () =>
-      createCommandResult({
-        stdout: 'agent "codex-advisor" not found\nFalling back to default agent',
-      }),
+    runCommand: async () => {
+      directCalls += 1;
+      return createCommandResult({
+        stdout: directCalls === 1
+          ? 'agent "codex-advisor" not found\nFalling back to default agent'
+          : JSON.stringify({ type: "text", part: { text: "OK" } }),
+      });
+    },
+    askOpenCodeAdvisorImpl: async () => {
+      throw new Error("should not reach health check");
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "agent_missing_or_fallback");
+});
+
+test("runDoctor classifies planner fallback from direct OpenCode output", async () => {
+  let directCalls = 0;
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    runCommand: async () => {
+      directCalls += 1;
+      if (directCalls === 1) {
+        return createCommandResult();
+      }
+      return createCommandResult({
+        stdout: 'agent "codex-planning-partner" not found\nFalling back to default agent',
+      });
+    },
     askOpenCodeAdvisorImpl: async () => {
       throw new Error("should not reach health check");
     },

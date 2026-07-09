@@ -36,11 +36,12 @@ npm test
 npm run test:doctor
 ```
 
-Create the agent file:
+Create the agent files:
 
 ```powershell
 New-Item -ItemType Directory -Force -Path <agent-dir>
 Copy-Item -LiteralPath ".\agents\codex-advisor.md" -Destination "<agent-dir>\codex-advisor.md" -Force
+Copy-Item -LiteralPath ".\agents\codex-planning-partner.md" -Destination "<agent-dir>\codex-planning-partner.md" -Force
 ```
 
 Add this MCP block to `<codex-config>`:
@@ -60,6 +61,8 @@ OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 
 Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or the outer MCP tool will time out before the inner OpenCode run finishes.
 
+Queue files are stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
+
 From `<repo-root>`, set allowed roots in the same shell and then run the local doctor check. This terminal command does not inherit MCP env from your Codex config file.
 
 ```powershell
@@ -70,6 +73,7 @@ npm run doctor
 Expected:
 
 - the direct `codex-advisor` agent check passes
+- the direct `codex-planning-partner` agent check passes
 - the local `askOpenCodeAdvisor({ include_diff:false, include_status:false })` health check passes
 - the summary does not report forbidden fields such as `cwd` or stderr tails
 
@@ -86,6 +90,7 @@ Copy-Item -LiteralPath "<repo-root>\src\server.mjs" -Destination "<runtime-dir>\
 Copy-Item -LiteralPath "<repo-root>\package.json" -Destination "<runtime-dir>\package.json" -Force
 Copy-Item -LiteralPath "<repo-root>\package-lock.json" -Destination "<runtime-dir>\package-lock.json" -Force
 Copy-Item -LiteralPath "<repo-root>\agents\codex-advisor.md" -Destination "<agent-dir>\codex-advisor.md" -Force
+Copy-Item -LiteralPath "<repo-root>\agents\codex-planning-partner.md" -Destination "<agent-dir>\codex-planning-partner.md" -Force
 npm install --prefix <runtime-dir>
 ```
 
@@ -99,12 +104,12 @@ npm install --prefix <runtime-dir>
 
 - `invalid_cwd`: the requested repo is outside `OPENCODE_ADVISOR_ALLOWED_ROOTS`
 - `opencode_not_found`: `opencode` is missing from PATH or `OPENCODE_ADVISOR_OPENCODE_CMD` is wrong
-- `opencode_failed`: the `codex-advisor` agent is missing or the OpenCode run failed
+- `opencode_failed`: the required OpenCode agent is missing or the OpenCode run failed
 - MCP tool missing in Codex: reload or restart Codex after config changes
 
 If `npm run doctor` fails, use its bucket as the first triage hint:
 
-- `agent_missing_or_fallback`: reinstall `agents/codex-advisor.md` and confirm `opencode agent list`
+- `agent_missing_or_fallback`: reinstall `agents/codex-advisor.md` and `agents/codex-planning-partner.md`, then confirm `opencode agent list`
 - `invalid_cwd_or_allowed_roots`: narrow or correct `OPENCODE_ADVISOR_ALLOWED_ROOTS`, then rerun doctor from `<repo-root>`
 - `upstream_unavailable`: your configured OpenCode provider path is temporarily unavailable
 - `timeout`: rerun or increase `OPENCODE_ADVISOR_TIMEOUT_MS`, and keep `tool_timeout_sec` higher than the inner timeout

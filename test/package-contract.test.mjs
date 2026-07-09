@@ -15,6 +15,10 @@ const usageDoc = readFileSync(new URL("../docs/USAGE.md", import.meta.url), "utf
 const acceptanceDoc = readFileSync(new URL("../docs/ACCEPTANCE.md", import.meta.url), "utf8");
 const releasingDoc = readFileSync(new URL("../RELEASING.md", import.meta.url), "utf8");
 const repoRoot = new URL("../", import.meta.url);
+const testRunnerScript = readFileSync(
+  new URL("../scripts/run-test-files.mjs", import.meta.url),
+  "utf8",
+);
 
 function runNpmJson(args) {
   const npmExecPath = process.env.npm_execpath;
@@ -35,15 +39,16 @@ function runNpmJson(args) {
 }
 
 test("default npm test excludes doctor-specific test coverage", () => {
-  assert.match(packageJson.scripts.test, /--test-force-exit/);
-  assert.match(packageJson.scripts.test, /--test-concurrency=1/);
-  assert.match(packageJson.scripts.test, /test\/server\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/runtime-shared\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/package-contract\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/mcp-integration\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/queue-integration\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/bin\.test\.mjs/);
-  assert.doesNotMatch(packageJson.scripts.test, /doctor\.test\.mjs/);
+  assert.equal(packageJson.scripts.test, "node scripts/run-test-files.mjs");
+  assert.match(testRunnerScript, /--test-force-exit/);
+  assert.match(testRunnerScript, /test\/server\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/runtime-shared\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/package-contract\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/queue\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/mcp-integration\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/queue-integration\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/bin\.test\.mjs/);
+  assert.doesNotMatch(testRunnerScript, /doctor\.test\.mjs/);
   assert.equal(packageJson.scripts["test:doctor"], "node --test test/doctor.test.mjs");
 });
 

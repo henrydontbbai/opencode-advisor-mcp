@@ -73,8 +73,11 @@ async function writeJson(filePath, value) {
 
 function getDefaultQueueDir(env = process.env, platform = process.platform) {
   const pathApi = pathForPlatform(platform);
+  if (env.OPENCODE_ADVISOR_QUEUE_DIR) {
+    return pathApi.resolve(env.OPENCODE_ADVISOR_QUEUE_DIR);
+  }
+
   const home =
-    env.OPENCODE_ADVISOR_QUEUE_DIR ||
     env.USERPROFILE ||
     env.HOME ||
     os.homedir();
@@ -274,6 +277,17 @@ async function recoverOrExpireTasks(queueDir, tasks, config, now) {
     const age = now - createdAt;
     const staleRuntime = now - updatedAt;
 
+    const eligibleForExpiry = task.status === "queued" || (task.status === "running" && staleRuntime > config.runningStaleMs);
+    if (age > config.taskTtlMs && eligibleForExpiry) {
+      task.status = "expired";
+      task.updated_at = isoFrom(now);
+      task.result = task.result ?? createExpiredResponse(task.id);
+      delete task.runner_id;
+      delete task.started_at;
+      await writeTaskFile(queueDir, task);
+      continue;
+    }
+
     if (task.status === "running" && staleRuntime > config.runningStaleMs) {
       task.status = "queued";
       task.updated_at = isoFrom(now);
@@ -281,13 +295,6 @@ async function recoverOrExpireTasks(queueDir, tasks, config, now) {
       delete task.started_at;
       await writeTaskFile(queueDir, task);
       continue;
-    }
-
-    if (age > config.taskTtlMs && task.status !== "completed" && task.status !== "failed" && task.status !== "timeout") {
-      task.status = "expired";
-      task.updated_at = isoFrom(now);
-      task.result = task.result ?? createExpiredResponse(task.id);
-      await writeTaskFile(queueDir, task);
     }
   }
 }
@@ -336,14 +343,18 @@ async function getTaskResultInternal(queueDir, taskId, config) {
     return createInvalidTaskIdResponse();
   }
 
+  const now = Date.now();
+  const tasks = await listTaskFiles(queueDir);
+  await recoverOrExpireTasks(queueDir, tasks, config, now);
+
   const task = await readTaskFile(queueDir, taskId);
   if (!task) {
     return createExpiredResponse(taskId);
   }
 
   if (task.status === "queued" || task.status === "running") {
-    const tasks = await listTaskFiles(queueDir);
-    return createPendingResponse(task, tasks, config);
+    const refreshedTasks = await listTaskFiles(queueDir);
+    return createPendingResponse(task, refreshedTasks, config);
   }
 
   return finalizeTaskResult(task);
@@ -453,9 +464,14 @@ export async function ensureQueueRunner({
     return false;
   }
 
+  const runnerEnv = {
+    ...env,
+    OPENCODE_ADVISOR_QUEUE_DIR: config.queueDir,
+  };
+
   const child = spawnProcess(nodeExec, [RUNNER_SCRIPT_PATH], {
     cwd: config.queueDir,
-    env,
+    env: runnerEnv,
     detached: true,
     windowsHide: true,
     stdio: "ignore",
@@ -474,8 +490,11 @@ export function createTaskQueue({
 
   return {
     async submitAndWait({ role, input }) {
+      const now = Date.now();
       const tasks = await listTaskFiles(config.queueDir);
-      const pendingCount = tasks.filter((task) => task.status === "queued" || task.status === "running").length;
+      await recoverOrExpireTasks(config.queueDir, tasks, config, now);
+      const refreshedTasks = await listTaskFiles(config.queueDir);
+      const pendingCount = refreshedTasks.filter((task) => task.status === "queued" || task.status === "running").length;
       if (pendingCount >= config.maxPending) {
         return createQueueFullResponse(config);
       }
@@ -504,6 +523,11 @@ export function createTaskQueue({
       if (!isValidTaskId(taskId)) {
         return createInvalidTaskIdResponse();
       }
+      const current = await getTaskResultInternal(config.queueDir, taskId, config);
+      if (!(current?.error === "queued" && current?.details?.phase_pending)) {
+        return current;
+      }
+
       await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec });
       return getTaskResultInternal(config.queueDir, taskId, config);
     },

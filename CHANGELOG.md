@@ -11,6 +11,7 @@
 - fixed OpenCode fallback and upstream detection drift so assistant text and tool output do not trigger false failures in either server or doctor
 - aligned public security-reporting docs with GitHub private vulnerability reporting
 - clarified source/GitHub install as the current path while npm publication remains future work
+- hardened queued task polling so completed/expired/queue-full results stay stable without unnecessary runner restarts, and changed `OPENCODE_ADVISOR_QUEUE_DIR` to act as a direct queue directory override
 
 ## 0.2.0
 

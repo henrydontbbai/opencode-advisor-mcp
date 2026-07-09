@@ -130,6 +130,8 @@ Queue defaults are conservative:
 
 Queue state is stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
 
+If you override `OPENCODE_ADVISOR_QUEUE_DIR`, it is treated as the queue directory itself rather than as a parent folder.
+
 ## Local Verification
 
 From the repository:

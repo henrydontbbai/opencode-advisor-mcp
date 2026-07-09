@@ -650,6 +650,58 @@ test("askOpenCodeAdvisor returns queued result when task stays pending", async (
   assert.equal(result.details.role, "reviewer");
 });
 
+test("getOpenCodeTask returns completed reviewer results from the task queue", async () => {
+  const taskQueue = {
+    getTaskResult: async () => ({
+      ok: true,
+      base_ref: "HEAD",
+      status: "M src/server.mjs",
+      diff_truncated: false,
+      advisor_text: "Looks good",
+      opencode_exit_code: 0,
+    }),
+  };
+
+  const server = createServer({
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+    platform: "win32",
+    taskQueue,
+  });
+
+  const taskResponse = await server._registeredTools.get_opencode_task.handler({
+    task_id: "ocq_completedreviewer",
+  });
+  const taskResult = JSON.parse(taskResponse.content[0].text);
+  assert.equal(taskResult.ok, true);
+  assert.equal(taskResult.advisor_text, "Looks good");
+});
+
+test("getOpenCodeTask returns completed planner results from the task queue", async () => {
+  const taskQueue = {
+    getTaskResult: async () => ({
+      ok: true,
+      base_ref: "HEAD",
+      status: "M docs/plan.md",
+      diff_truncated: false,
+      planner_text: "Tighten validation points.",
+      opencode_exit_code: 0,
+    }),
+  };
+
+  const server = createServer({
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+    platform: "win32",
+    taskQueue,
+  });
+
+  const taskResponse = await server._registeredTools.get_opencode_task.handler({
+    task_id: "ocq_completedplanner",
+  });
+  const taskResult = JSON.parse(taskResponse.content[0].text);
+  assert.equal(taskResult.ok, true);
+  assert.equal(taskResult.planner_text, "Tighten validation points.");
+});
+
 test("createServer registers planner, advisor, and task tools with injected dependencies", async () => {
   const { runProcess } = createMockRunProcess();
   const taskQueue = {

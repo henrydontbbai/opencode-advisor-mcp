@@ -50,4 +50,7 @@ test("docs advertise planner plus queued task lookup without claiming npm releas
   assert.match(installDoc, /codex-planning-partner\.md/);
   assert.match(usageDoc, /queued\/running is pending, not failed/i);
   assert.match(acceptanceDoc, /codex-planning-partner/);
+  assert.match(usageDoc, /get_opencode_task.*same public result shape/i);
+  assert.match(acceptanceDoc, /manual queued-path poll/i);
+  assert.match(acceptanceDoc, /completed result should preserve `advisor_text` or `planner_text`/i);
 });

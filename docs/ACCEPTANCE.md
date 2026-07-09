@@ -152,6 +152,13 @@ Queued path:
 If an ask tool returns { ok:false, error:"queued" }, keep the phase pending and call get_opencode_task with the returned task_id.
 ```
 
+Manual queued-path poll:
+
+```text
+After polling with get_opencode_task, the completed result should preserve `advisor_text` or `planner_text` rather than changing to a different success shape.
+If the task ages out, it should return an explicit expired status rather than timeout.
+```
+
 Invalid cwd:
 
 ```powershell

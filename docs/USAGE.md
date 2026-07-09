@@ -88,6 +88,12 @@ If the queue is busy, the ask tool may return:
 
 queued/running is pending, not failed. Keep that phase open and call `get_opencode_task` later with the returned `task_id`.
 
+When the task is finished, `get_opencode_task` returns the same public result shape you would have received inline:
+
+- reviewer results keep `advisor_text`
+- planner results keep `planner_text`
+- expired tasks stay distinct from `timeout` and generic failures
+
 Default queue policy:
 
 - global concurrency `4`
@@ -98,6 +104,8 @@ Default queue policy:
 - pending-task TTL `86400000ms`
 
 Queue files live under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
+
+If you set `OPENCODE_ADVISOR_QUEUE_DIR`, that value is used as the queue directory directly.
 
 ## Notes
 

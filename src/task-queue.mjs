@@ -13,6 +13,8 @@ const RUNNER_STATE_FILENAME = "_runner.json";
 const RUNNER_SCRIPT_PATH = fileURLToPath(new URL("./queue-runner.mjs", import.meta.url));
 const TASK_ID_PATTERN = /^ocq_[A-Za-z0-9]+$/;
 const SUBMISSION_LOCK_STALE_MS = 10000;
+const DEFAULT_STALE_FLOOR_MS = DEFAULT_TIMEOUT_MS + 120000;
+const QUEUE_DIR_ERROR_CODES = new Set(["EACCES", "EEXIST", "ENOENT", "ENOTDIR", "EPERM", "EROFS"]);
 
 function isoFrom(value) {
   return new Date(value).toISOString();
@@ -187,6 +189,19 @@ function createQueueFullResponse(config) {
       max_pending: config.maxPending,
     },
   };
+}
+
+function createQueueDirUnavailableResponse() {
+  return {
+    ok: false,
+    error: "opencode_failed",
+    message: "OpenCode task queue directory is unavailable.",
+    details: {},
+  };
+}
+
+function isQueueDirUnavailableError(error) {
+  return QUEUE_DIR_ERROR_CODES.has(error?.code);
 }
 
 function isValidTaskId(taskId) {
@@ -438,6 +453,9 @@ async function getTaskResultInternal(queueDir, taskId, config) {
 
 export function getQueueConfig(env = process.env, platform = process.platform) {
   const timeoutMs = positiveNumber(env.OPENCODE_ADVISOR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+  const defaultRunnerStaleMs = Math.max(timeoutMs + 120000, DEFAULT_STALE_FLOOR_MS);
+  const configuredRunnerStaleMs = env.OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS;
+  const configuredRunningStaleMs = env.OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS;
 
   return {
     queueDir: getDefaultQueueDir(env, platform),
@@ -450,11 +468,14 @@ export function getQueueConfig(env = process.env, platform = process.platform) {
     maxPending: positiveNumber(env.OPENCODE_ADVISOR_QUEUE_MAX_PENDING, 16),
     taskTtlMs: positiveNumber(env.OPENCODE_ADVISOR_TASK_TTL_MS, 86400000),
     runnerIdleMs: positiveNumber(env.OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS, 15000),
-    runnerStaleMs: positiveNumber(env.OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS, timeoutMs + 120000),
-    runningStaleMs: positiveNumber(
-      env.OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS ?? env.OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS,
-      timeoutMs + 120000,
-    ),
+    runnerStaleMs: configuredRunnerStaleMs == null
+      ? defaultRunnerStaleMs
+      : positiveNumber(configuredRunnerStaleMs, defaultRunnerStaleMs),
+    runningStaleMs: configuredRunningStaleMs == null
+      ? configuredRunnerStaleMs == null
+        ? defaultRunnerStaleMs
+        : positiveNumber(configuredRunnerStaleMs, defaultRunnerStaleMs)
+      : positiveNumber(configuredRunningStaleMs, defaultRunnerStaleMs),
     pollIntervalMs: positiveNumber(env.OPENCODE_ADVISOR_QUEUE_POLL_MS, 1000),
     timeoutMs,
   };
@@ -588,40 +609,54 @@ export function createTaskQueue({
 
   return {
     async submitAndWait({ role, input }) {
-      const task = createTaskFile({ role, input });
-      const submitted = await submitTaskAtomically(config.queueDir, task, config);
-      if (!submitted.ok) {
-        return submitted.result;
-      }
-      await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec });
-
-      const deadline = Date.now() + config.inlineWaitMs;
-      for (;;) {
-        const result = await getTaskResultInternal(config.queueDir, task.id, config);
-        if (!(result?.error === "queued" && result?.details?.phase_pending)) {
-          return result;
+      try {
+        const task = createTaskFile({ role, input });
+        const submitted = await submitTaskAtomically(config.queueDir, task, config);
+        if (!submitted.ok) {
+          return submitted.result;
         }
+        await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec });
 
-        if (Date.now() >= deadline) {
-          return result;
+        const deadline = Date.now() + config.inlineWaitMs;
+        for (;;) {
+          const result = await getTaskResultInternal(config.queueDir, task.id, config);
+          if (!(result?.error === "queued" && result?.details?.phase_pending)) {
+            return result;
+          }
+
+          if (Date.now() >= deadline) {
+            return result;
+          }
+
+          await delay(Math.min(config.pollIntervalMs, Math.max(250, config.retryAfterMs / 10)));
         }
-
-        await delay(Math.min(config.pollIntervalMs, Math.max(250, config.retryAfterMs / 10)));
+      } catch (error) {
+        if (isQueueDirUnavailableError(error)) {
+          return createQueueDirUnavailableResponse();
+        }
+        throw error;
       }
     },
 
     async getTaskResult(payload) {
-      const taskId = typeof payload === "string" ? payload : payload?.task_id;
-      if (!isValidTaskId(taskId)) {
-        return createInvalidTaskIdResponse();
-      }
-      const current = await getTaskResultInternal(config.queueDir, taskId, config);
-      if (!(current?.error === "queued" && current?.details?.phase_pending)) {
-        return current;
-      }
+      try {
+        const taskId = typeof payload === "string" ? payload : payload?.task_id;
+        if (!isValidTaskId(taskId)) {
+          return createInvalidTaskIdResponse();
+        }
+        const current = await getTaskResultInternal(config.queueDir, taskId, config);
+        if (!(current?.error === "queued" && current?.details?.phase_pending)) {
+          return current;
+        }
 
-      await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec });
-      return getTaskResultInternal(config.queueDir, taskId, config);
+        await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec });
+        return getTaskResultInternal(config.queueDir, taskId, config);
+      } catch (error) {
+        if (isQueueDirUnavailableError(error)) {
+          return createQueueDirUnavailableResponse();
+        }
+        throw error;
+      }
     },
   };
 }
@@ -688,6 +723,8 @@ export async function runQueueRunner({
 
     return { started: true };
   } finally {
+    signals?.off?.("SIGTERM", stop);
+    signals?.off?.("SIGINT", stop);
     await releaseRunnerLock(config.queueDir);
   }
 }

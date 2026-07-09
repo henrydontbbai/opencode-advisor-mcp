@@ -2,9 +2,10 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { askOpenCodeAdvisor, extractOpenCodeText } from "../src/server.mjs";
+import { askOpenCodeAdvisor, askOpenCodePlanner, extractOpenCodeText } from "../src/server.mjs";
 import {
   DEFAULT_TIMEOUT_MS,
+  PLANNER_SUCCESS_RESPONSE_KEYS,
   SUCCESS_RESPONSE_KEYS,
   outputHasAgentFallback,
   outputHasUpstreamUnavailable,
@@ -15,7 +16,10 @@ import {
 } from "../src/runtime-shared.mjs";
 
 const FORBIDDEN_SUCCESS_KEYS = new Set(["cwd", "stderr_tail", "stdout_tail", "allowed_roots"]);
-const ALLOWED_SUCCESS_KEYS = new Set(SUCCESS_RESPONSE_KEYS);
+const ALLOWED_SUCCESS_KEYS_BY_ROLE = {
+  reviewer: new Set(SUCCESS_RESPONSE_KEYS),
+  planner: new Set(PLANNER_SUCCESS_RESPONSE_KEYS),
+};
 const DIRECT_AGENT_CHECKS = [
   { agentName: "codex-advisor", label: "Direct OpenCode review agent check" },
   { agentName: "codex-planning-partner", label: "Direct OpenCode planning agent check" },
@@ -61,15 +65,16 @@ function unique(items) {
   return [...new Set(items)];
 }
 
-export function findPayloadLeaks(payload, { cwd } = {}) {
+export function findPayloadLeaks(payload, { role = "reviewer", cwd } = {}) {
   const leaks = [];
+  const allowedSuccessKeys = ALLOWED_SUCCESS_KEYS_BY_ROLE[role] ?? ALLOWED_SUCCESS_KEYS_BY_ROLE.reviewer;
 
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return leaks;
   }
 
   for (const key of Object.keys(payload)) {
-    if (FORBIDDEN_SUCCESS_KEYS.has(key) || !ALLOWED_SUCCESS_KEYS.has(key)) {
+    if (FORBIDDEN_SUCCESS_KEYS.has(key) || !allowedSuccessKeys.has(key)) {
       leaks.push(key);
     }
   }
@@ -226,6 +231,7 @@ export async function runDoctor({
   platform = process.platform,
   runCommand: runCommandImpl = runCommand,
   askOpenCodeAdvisorImpl = askOpenCodeAdvisor,
+  askOpenCodePlannerImpl = askOpenCodePlanner,
   existsSync: exists = existsSync,
 } = {}) {
   const timeoutMs = positiveNumber(env.OPENCODE_ADVISOR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
@@ -248,7 +254,7 @@ export async function runDoctor({
     }
   }
 
-  const healthResult = await askOpenCodeAdvisorImpl(
+  const advisorHealthResult = await askOpenCodeAdvisorImpl(
     {
       cwd,
       include_diff: false,
@@ -261,44 +267,100 @@ export async function runDoctor({
     },
   );
 
-  if (!healthResult.ok) {
+  if (!advisorHealthResult.ok) {
     let bucket = "generic_opencode_failure";
-    if (healthResult.error === "invalid_cwd") bucket = "invalid_cwd_or_allowed_roots";
-    else if (healthResult.error === "timeout") bucket = "timeout";
-    else if (healthResult.error === "opencode_not_found") bucket = "opencode_not_found";
-    else if (textHasAgentFallback(healthResult.message || "")) bucket = "agent_missing_or_fallback";
-    else if (textHasUpstreamUnavailable(healthResult.message || "")) bucket = "upstream_unavailable";
+    if (advisorHealthResult.error === "invalid_cwd") bucket = "invalid_cwd_or_allowed_roots";
+    else if (advisorHealthResult.error === "timeout") bucket = "timeout";
+    else if (advisorHealthResult.error === "opencode_not_found") bucket = "opencode_not_found";
+    else if (textHasAgentFallback(advisorHealthResult.message || "")) bucket = "agent_missing_or_fallback";
+    else if (textHasUpstreamUnavailable(advisorHealthResult.message || "")) bucket = "upstream_unavailable";
 
     steps.push({
-      id: "health",
+      id: "advisor-health",
       label: "askOpenCodeAdvisor health check",
       ok: false,
-      detail: `${healthResult.error}: ${healthResult.message}`,
+      detail: `${advisorHealthResult.error}: ${advisorHealthResult.message}`,
     });
-    return buildFailureReport(bucket, steps, healthResult.message);
+    return buildFailureReport(bucket, steps, advisorHealthResult.message);
   }
 
   steps.push({
-    id: "health",
+    id: "advisor-health",
     label: "askOpenCodeAdvisor health check",
     ok: true,
     detail: "ok: true with include_diff:false/include_status:false",
   });
 
-  const leaks = findPayloadLeaks(healthResult, { cwd });
-  if (leaks.length > 0) {
+  const advisorLeaks = findPayloadLeaks(advisorHealthResult, { cwd, role: "reviewer" });
+  if (advisorLeaks.length > 0) {
     steps.push({
-      id: "sanitize",
-      label: "Sanitized success payload",
+      id: "advisor-sanitize",
+      label: "Sanitized advisor success payload",
       ok: false,
-      detail: `forbidden fields or path leaks: ${leaks.join(", ")}`,
+      detail: `forbidden fields or path leaks: ${advisorLeaks.join(", ")}`,
     });
-    return buildFailureReport("generic_opencode_failure", steps, `Forbidden success payload leaks: ${leaks.join(", ")}`);
+    return buildFailureReport("generic_opencode_failure", steps, `Forbidden success payload leaks: ${advisorLeaks.join(", ")}`);
   }
 
   steps.push({
-    id: "sanitize",
-    label: "Sanitized success payload",
+    id: "advisor-sanitize",
+    label: "Sanitized advisor success payload",
+    ok: true,
+    detail: "no forbidden fields detected",
+  });
+
+  const plannerHealthResult = await askOpenCodePlannerImpl(
+    {
+      cwd,
+      include_diff: false,
+      include_status: false,
+      current_plan: "1. Validate config\n2. Run doctor",
+    },
+    {
+      env,
+      platform,
+      useQueue: false,
+    },
+  );
+
+  if (!plannerHealthResult.ok) {
+    let bucket = "generic_opencode_failure";
+    if (plannerHealthResult.error === "invalid_cwd") bucket = "invalid_cwd_or_allowed_roots";
+    else if (plannerHealthResult.error === "timeout") bucket = "timeout";
+    else if (plannerHealthResult.error === "opencode_not_found") bucket = "opencode_not_found";
+    else if (textHasAgentFallback(plannerHealthResult.message || "")) bucket = "agent_missing_or_fallback";
+    else if (textHasUpstreamUnavailable(plannerHealthResult.message || "")) bucket = "upstream_unavailable";
+
+    steps.push({
+      id: "planner-health",
+      label: "askOpenCodePlanner health check",
+      ok: false,
+      detail: `${plannerHealthResult.error}: ${plannerHealthResult.message}`,
+    });
+    return buildFailureReport(bucket, steps, plannerHealthResult.message);
+  }
+
+  steps.push({
+    id: "planner-health",
+    label: "askOpenCodePlanner health check",
+    ok: true,
+    detail: "ok: true with include_diff:false/include_status:false",
+  });
+
+  const plannerLeaks = findPayloadLeaks(plannerHealthResult, { cwd, role: "planner" });
+  if (plannerLeaks.length > 0) {
+    steps.push({
+      id: "planner-sanitize",
+      label: "Sanitized planner success payload",
+      ok: false,
+      detail: `forbidden fields or path leaks: ${plannerLeaks.join(", ")}`,
+    });
+    return buildFailureReport("generic_opencode_failure", steps, `Forbidden planner success payload leaks: ${plannerLeaks.join(", ")}`);
+  }
+
+  steps.push({
+    id: "planner-sanitize",
+    label: "Sanitized planner success payload",
     ok: true,
     detail: "no forbidden fields detected",
   });

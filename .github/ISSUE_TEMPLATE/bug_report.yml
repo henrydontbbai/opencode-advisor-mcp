@@ -25,3 +25,41 @@ body:
       description: Node version, OS, Codex/OpenCode version, and install mode.
     validations:
       required: true
+  - type: dropdown
+    id: install_mode
+    attributes:
+      label: Install mode
+      description: Which install path are you using?
+      options:
+        - Source checkout from GitHub
+        - Local packed tarball install
+        - Other / mixed local setup
+    validations:
+      required: true
+  - type: textarea
+    id: doctor_output
+    attributes:
+      label: Doctor output
+      description: Paste sanitized `npm run doctor` output if this is an install/config/runtime issue. Remove secrets and private repository content.
+      render: text
+  - type: textarea
+    id: agent_status
+    attributes:
+      label: Agent status
+      description: Paste sanitized `opencode agent list` output or confirm whether both `codex-advisor` and `codex-planning-partner` are present.
+      render: text
+  - type: textarea
+    id: mcp_config
+    attributes:
+      label: Sanitized MCP config
+      description: Paste the relevant Codex MCP config block with secrets and personal paths redacted.
+      render: toml
+  - type: textarea
+    id: allowed_roots_shell
+    attributes:
+      label: Allowed roots / shell context
+      description: If doctor or install failed, note whether `OPENCODE_ADVISOR_ALLOWED_ROOTS` was set in the same shell where you ran doctor.
+  - type: markdown
+    attributes:
+      value: |
+        Do **not** paste secrets, `.env` contents, tokens, private diff content, or raw private repository paths.

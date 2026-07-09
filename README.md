@@ -4,6 +4,15 @@ OpenCode Advisor MCP is an unofficial local MCP server that lets Codex ask OpenC
 
 This project is for people who already use Codex and OpenCode locally and want a second review tool in the loop without giving that reviewer write access.
 
+## Prerequisites
+
+- Node.js `>=20`
+- a working local `opencode` CLI on `PATH`
+- OpenCode agent support with the bundled `codex-advisor` and `codex-planning-partner` templates installed
+- a local Codex setup that can load stdio MCP servers
+
+Current docs and tests are validated against OpenCode CLI `1.17.13`.
+
 ## Project Status
 
 - Latest tagged GitHub release: `v0.2.0`
@@ -24,7 +33,7 @@ Important boundaries:
 
 - The server sends Git status, optional Git diff context, your question, plan text, constraints, and working-directory context to your configured OpenCode runtime.
 - Depending on your OpenCode configuration, that runtime may use a remote model provider. Do not assume this means "nothing ever leaves the machine."
-- Public responses stay脱敏, but review context can still include repository content. This build now applies a conservative best-effort secret redaction pass to diff context before sending it to OpenCode; treat that as a safety net, not as a guarantee.
+- Public responses stay sanitized, but review context can still include repository content. This build now applies a conservative best-effort secret redaction pass to diff context before sending it to OpenCode; treat that as a safety net, not as a guarantee.
 - The included advisor template blocks writes and denies `.env` reads, but that is not a complete confidentiality guarantee.
 - Keep `OPENCODE_ADVISOR_ALLOWED_ROOTS` narrow. Do not point it at broad parent directories unless you deliberately want that scope.
 
@@ -55,12 +64,27 @@ npm test
 npm run test:doctor
 ```
 
+```bash
+git clone https://github.com/henrydontbbai/opencode-advisor-mcp.git
+cd opencode-advisor-mcp
+npm install
+npm run smoke
+npm test
+npm run test:doctor
+```
+
 Copy the bundled agent templates into your OpenCode agents directory:
 
 ```powershell
 New-Item -ItemType Directory -Force -Path <agent-dir>
 Copy-Item -LiteralPath ".\agents\codex-advisor.md" -Destination "<agent-dir>\codex-advisor.md" -Force
 Copy-Item -LiteralPath ".\agents\codex-planning-partner.md" -Destination "<agent-dir>\codex-planning-partner.md" -Force
+```
+
+```bash
+mkdir -p <agent-dir>
+cp ./agents/codex-advisor.md <agent-dir>/codex-advisor.md
+cp ./agents/codex-planning-partner.md <agent-dir>/codex-planning-partner.md
 ```
 
 Add this MCP config to Codex:
@@ -86,6 +110,11 @@ After the agent template is installed, set allowed roots in the same shell that 
 
 ```powershell
 $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+npm run doctor
+```
+
+```bash
+export OPENCODE_ADVISOR_ALLOWED_ROOTS="<allowed-root>"
 npm run doctor
 ```
 
@@ -137,6 +166,8 @@ Queue config env knobs currently supported:
 - `OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS`
 - `OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS`
 - `OPENCODE_ADVISOR_QUEUE_POLL_MS`
+
+If queue setup fails because the queue directory cannot be created or written, the tool now returns a structured failure instead of behaving like a silent disconnect.
 
 Queue state is stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
 

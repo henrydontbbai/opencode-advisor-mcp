@@ -1,24 +1,54 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
+const packageLock = JSON.parse(
+  readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"),
 );
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const installDoc = readFileSync(new URL("../docs/INSTALL.md", import.meta.url), "utf8");
 const usageDoc = readFileSync(new URL("../docs/USAGE.md", import.meta.url), "utf8");
 const acceptanceDoc = readFileSync(new URL("../docs/ACCEPTANCE.md", import.meta.url), "utf8");
 const releasingDoc = readFileSync(new URL("../RELEASING.md", import.meta.url), "utf8");
+const repoRoot = new URL("../", import.meta.url);
+const testRunnerScript = readFileSync(
+  new URL("../scripts/run-test-files.mjs", import.meta.url),
+  "utf8",
+);
+
+function runNpmJson(args) {
+  const npmExecPath = process.env.npm_execpath;
+  if (npmExecPath) {
+    const stdout = execFileSync(process.execPath, [npmExecPath, ...args], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    return JSON.parse(stdout);
+  }
+
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const stdout = execFileSync(npmCommand, args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  return JSON.parse(stdout);
+}
 
 test("default npm test excludes doctor-specific test coverage", () => {
-  assert.match(packageJson.scripts.test, /test\/server\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/runtime-shared\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/package-contract\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/mcp-integration\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/queue-integration\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /test\/bin\.test\.mjs/);
-  assert.doesNotMatch(packageJson.scripts.test, /doctor\.test\.mjs/);
+  assert.equal(packageJson.scripts.test, "node scripts/run-test-files.mjs");
+  assert.match(testRunnerScript, /--test-force-exit/);
+  assert.match(testRunnerScript, /test\/server\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/runtime-shared\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/package-contract\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/queue\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/mcp-integration\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/queue-integration\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/bin\.test\.mjs/);
+  assert.doesNotMatch(testRunnerScript, /doctor\.test\.mjs/);
   assert.equal(packageJson.scripts["test:doctor"], "node --test test/doctor.test.mjs");
 });
 
@@ -49,6 +79,65 @@ test("docs keep source install as the current path while npm stays unpublished",
   assert.match(readme, /has not been published to npm yet/i);
   assert.match(installDoc, /currently supports one public install mode:\s+[\r\n]+\s*1\. source checkout from GitHub/i);
   assert.match(releasingDoc, /npm publication is a future optional path/i);
+});
+
+test("real tarball contents stay aligned with the published package contract", () => {
+  const packResult = runNpmJson(["pack", "--dry-run", "--json"]);
+  const tarball = Array.isArray(packResult) ? packResult[0] : packResult;
+  const packedFiles = tarball.files.map((entry) => entry.path).sort();
+
+  assert.deepEqual(packedFiles, [
+    "LICENSE",
+    "README.md",
+    "agents/codex-advisor.md",
+    "agents/codex-planning-partner.md",
+    "bin/opencode-advisor-agent.mjs",
+    "package.json",
+    "src/opencode-core.mjs",
+    "src/queue-runner.mjs",
+    "src/runtime-shared.mjs",
+    "src/server.mjs",
+    "src/task-queue.mjs",
+  ]);
+
+  for (const required of [
+    "agents/codex-advisor.md",
+    "agents/codex-planning-partner.md",
+    "bin/opencode-advisor-agent.mjs",
+    "src/server.mjs",
+    "README.md",
+    "LICENSE",
+    "package.json",
+  ]) {
+    assert.equal(packedFiles.includes(required), true);
+  }
+
+  for (const forbiddenPrefix of [
+    "scripts/",
+    "test/",
+    ".github/",
+    ".worktrees/",
+    "node_modules/",
+  ]) {
+    assert.equal(packedFiles.some((entry) => entry.startsWith(forbiddenPrefix)), false);
+  }
+
+  for (const forbiddenName of [
+    "package-lock.json",
+    "issue-release.yml",
+  ]) {
+    assert.equal(packedFiles.includes(forbiddenName), false);
+  }
+});
+
+test("package-lock root metadata stays in sync with package.json", () => {
+  const root = packageLock.packages[""];
+
+  assert.equal(root.name, packageJson.name);
+  assert.equal(root.version, packageJson.version);
+  assert.deepEqual(root.bin, packageJson.bin);
+  assert.deepEqual(root.engines, packageJson.engines);
+  assert.deepEqual(root.dependencies, packageJson.dependencies);
 });
 
 test("docs advertise planner plus queued task lookup without claiming npm release", () => {

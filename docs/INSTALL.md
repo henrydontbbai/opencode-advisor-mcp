@@ -25,11 +25,20 @@ codex --version
 
 Each command should print a version or help output.
 
+Current docs and tests are validated against OpenCode CLI `1.17.13`.
+
 ## Source Install
 
 From `<repo-root>`:
 
 ```powershell
+npm install
+npm run smoke
+npm test
+npm run test:doctor
+```
+
+```bash
 npm install
 npm run smoke
 npm test
@@ -42,6 +51,12 @@ Create the agent files:
 New-Item -ItemType Directory -Force -Path <agent-dir>
 Copy-Item -LiteralPath ".\agents\codex-advisor.md" -Destination "<agent-dir>\codex-advisor.md" -Force
 Copy-Item -LiteralPath ".\agents\codex-planning-partner.md" -Destination "<agent-dir>\codex-planning-partner.md" -Force
+```
+
+```bash
+mkdir -p <agent-dir>
+cp ./agents/codex-advisor.md <agent-dir>/codex-advisor.md
+cp ./agents/codex-planning-partner.md <agent-dir>/codex-planning-partner.md
 ```
 
 Add this MCP block to `<codex-config>`:
@@ -64,11 +79,17 @@ OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or the outer MCP tool will time out before the inner OpenCode run finishes.
 
 Queue files are stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
+If the queue directory cannot be created or written, the MCP tool now returns a structured failure instead of looking like a dropped connection.
 
 From `<repo-root>`, set allowed roots in the same shell and then run the local doctor check. This terminal command does not inherit MCP env from your Codex config file.
 
 ```powershell
 $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+npm run doctor
+```
+
+```bash
+export OPENCODE_ADVISOR_ALLOWED_ROOTS="<allowed-root>"
 npm run doctor
 ```
 

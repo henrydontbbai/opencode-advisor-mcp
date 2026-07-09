@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runDoctor, findPayloadLeaks } from "../scripts/opencode-advisor-doctor.mjs";
-import { createSuccessResponse, SUCCESS_RESPONSE_KEYS } from "../src/runtime-shared.mjs";
+import {
+  createPlannerSuccessResponse,
+  createSuccessResponse,
+  PLANNER_SUCCESS_RESPONSE_KEYS,
+  SUCCESS_RESPONSE_KEYS,
+} from "../src/runtime-shared.mjs";
 
 const WINDOWS_ALLOWED_ROOT = "C:\\workspace\\repo-root";
 const WINDOWS_CHILD_REPO = `${WINDOWS_ALLOWED_ROOT}\\project`;
@@ -29,10 +34,25 @@ function createCanonicalSuccessPayload(overrides = {}) {
   };
 }
 
+function createCanonicalPlannerSuccessPayload(overrides = {}) {
+  return {
+    ...createPlannerSuccessResponse({
+      baseRef: "HEAD",
+      status: "",
+      diffTruncated: false,
+      plannerText: "OK",
+      opencodeExitCode: 0,
+    }),
+    ...overrides,
+  };
+}
+
 test("runDoctor succeeds with source-local health checks and sanitized payload", async () => {
   const commandCalls = [];
   let advisorInput;
   let advisorDeps;
+  let plannerInput;
+  let plannerDeps;
 
   const report = await runDoctor({
     cwd: WINDOWS_CHILD_REPO,
@@ -46,6 +66,11 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
       advisorInput = input;
       advisorDeps = deps;
       return createCanonicalSuccessPayload();
+    },
+    askOpenCodePlannerImpl: async (input, deps) => {
+      plannerInput = input;
+      plannerDeps = deps;
+      return createCanonicalPlannerSuccessPayload();
     },
   });
 
@@ -69,6 +94,17 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
     include_status: false,
   });
   assert.deepEqual(advisorDeps, {
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+    platform: "win32",
+    useQueue: false,
+  });
+  assert.deepEqual(plannerInput, {
+    cwd: WINDOWS_CHILD_REPO,
+    include_diff: false,
+    include_status: false,
+    current_plan: "1. Validate config\n2. Run doctor",
+  });
+  assert.deepEqual(plannerDeps, {
     env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
     platform: "win32",
     useQueue: false,
@@ -150,6 +186,7 @@ test("runDoctor ignores fallback phrases inside direct assistant text output", a
         }),
       }),
     askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload(),
+    askOpenCodePlannerImpl: async () => createCanonicalPlannerSuccessPayload(),
   });
 
   assert.equal(report.ok, true);
@@ -168,6 +205,9 @@ test("runDoctor classifies invalid_cwd from health check as allowed-roots proble
       message: "cwd is outside configured allowed roots",
       details: {},
     }),
+    askOpenCodePlannerImpl: async () => {
+      throw new Error("should not reach planner health check");
+    },
   });
 
   assert.equal(report.ok, false);
@@ -203,6 +243,9 @@ test("runDoctor classifies timeout from health check", async () => {
       message: "OpenCode advisor timed out after 300000ms",
       details: {},
     }),
+    askOpenCodePlannerImpl: async () => {
+      throw new Error("should not reach planner health check");
+    },
   });
 
   assert.equal(report.ok, false);
@@ -220,6 +263,9 @@ test("runDoctor classifies agent fallback from health check message", async () =
       message: 'agent "codex-advisor" not found. Falling back to default agent',
       details: {},
     }),
+    askOpenCodePlannerImpl: async () => {
+      throw new Error("should not reach planner health check");
+    },
   });
 
   assert.equal(report.ok, false);
@@ -237,6 +283,9 @@ test("runDoctor classifies upstream unavailable from health check message", asyn
       message: "upstream service temporarily unavailable",
       details: {},
     }),
+    askOpenCodePlannerImpl: async () => {
+      throw new Error("should not reach planner health check");
+    },
   });
 
   assert.equal(report.ok, false);
@@ -254,6 +303,9 @@ test("runDoctor classifies nonzero health check failure as generic opencode fail
       message: "OpenCode exited with code 2",
       details: {},
     }),
+    askOpenCodePlannerImpl: async () => {
+      throw new Error("should not reach planner health check");
+    },
   });
 
   assert.equal(report.ok, false);
@@ -290,6 +342,14 @@ test("findPayloadLeaks accepts the canonical server success response shape", () 
   assert.deepEqual(findPayloadLeaks(payload), []);
 });
 
+test("findPayloadLeaks accepts the canonical planner success response shape", () => {
+  const payload = Object.fromEntries(
+    PLANNER_SUCCESS_RESPONSE_KEYS.map((key) => [key, createCanonicalPlannerSuccessPayload()[key]]),
+  );
+
+  assert.deepEqual(findPayloadLeaks(payload, { role: "planner" }), []);
+});
+
 test("runDoctor fails sanitization check when success payload exposes forbidden fields", async () => {
   const report = await runDoctor({
     cwd: "/repo",
@@ -299,9 +359,46 @@ test("runDoctor fails sanitization check when success payload exposes forbidden 
       ...createCanonicalSuccessPayload(),
       cwd: "/repo",
     }),
+    askOpenCodePlannerImpl: async () => createCanonicalPlannerSuccessPayload(),
   });
 
   assert.equal(report.ok, false);
   assert.equal(report.bucket, "generic_opencode_failure");
   assert.equal(report.steps.at(-1).ok, false);
+});
+
+test("runDoctor fails when planner health check leaks forbidden fields", async () => {
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    runCommand: async () => createCommandResult(),
+    askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload(),
+    askOpenCodePlannerImpl: async () => ({
+      ...createCanonicalPlannerSuccessPayload(),
+      cwd: "/repo",
+    }),
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "generic_opencode_failure");
+  assert.equal(report.steps.at(-1).label, "Sanitized planner success payload");
+});
+
+test("runDoctor allows planner health to fail independently", async () => {
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    runCommand: async () => createCommandResult(),
+    askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload(),
+    askOpenCodePlannerImpl: async () => ({
+      ok: false,
+      error: "opencode_failed",
+      message: 'agent "codex-planning-partner" not found. Falling back to default agent',
+      details: {},
+    }),
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "agent_missing_or_fallback");
+  assert.equal(report.steps.at(-1).label, "askOpenCodePlanner health check");
 });

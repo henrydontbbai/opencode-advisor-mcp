@@ -25,6 +25,33 @@ test("getQueueConfig uses 4/2/2 defaults", () => {
   assert.equal(config.maxPending, 16);
 });
 
+test("getQueueConfig keeps stale thresholds at or above the default floor when timeout is reduced", () => {
+  const config = getQueueConfig(
+    {
+      OPENCODE_ADVISOR_TIMEOUT_MS: "1000",
+    },
+    process.platform,
+  );
+
+  assert.equal(config.timeoutMs, 1000);
+  assert.equal(config.runnerStaleMs, 420000);
+  assert.equal(config.runningStaleMs, 420000);
+});
+
+test("getQueueConfig still honors explicit stale threshold overrides", () => {
+  const config = getQueueConfig(
+    {
+      OPENCODE_ADVISOR_TIMEOUT_MS: "1000",
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "500000",
+      OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "700000",
+    },
+    process.platform,
+  );
+
+  assert.equal(config.runnerStaleMs, 500000);
+  assert.equal(config.runningStaleMs, 700000);
+});
+
 test("getQueueConfig treats OPENCODE_ADVISOR_QUEUE_DIR as the direct queue directory", () => {
   const queueDir = path.join(os.tmpdir(), "ocq-direct");
   const config = getQueueConfig(
@@ -387,6 +414,27 @@ test("createTaskQueue returns queue_full without spawning the runner", async () 
   assert.equal(spawnCalled, false);
 });
 
+test("createTaskQueue returns a structured error when the queue directory cannot be created", async () => {
+  const baseDir = mkdtempSync(path.join(os.tmpdir(), "ocq-unavailable-"));
+  const occupiedPath = path.join(baseDir, "occupied");
+  writeFileSync(occupiedPath, "not a directory\n", "utf8");
+
+  const failingQueue = createTaskQueue({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: path.join(occupiedPath, "queue"),
+    },
+    platform: process.platform,
+    spawnProcess: () => {
+      throw new Error("should not spawn");
+    },
+  });
+
+  const result = await failingQueue.submitAndWait({ role: "planner", input: { current_plan: "blocked" } });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "opencode_failed");
+  assert.match(result.message, /queue directory is unavailable/i);
+});
+
 test("createTaskQueue enforces maxPending atomically across concurrent submissions", async () => {
   const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
   let spawnCount = 0;
@@ -617,6 +665,53 @@ test("runQueueRunner exits promptly after SIGTERM once the current task finishes
   const saved = await readTaskFile(queueDir, "ocq_shutdown");
   assert.equal(saved.status, "completed");
   assert.equal(slept, false);
+});
+
+test("runQueueRunner removes signal handlers after shutdown", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const task = createTaskFile({
+    id: "ocq_signalcleanup",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "cleanup" },
+  });
+  await writeTaskFile(queueDir, task);
+
+  const handlers = new Map();
+  const removed = [];
+  const signals = {
+    on(signal, handler) {
+      handlers.set(signal, handler);
+    },
+    off(signal, handler) {
+      removed.push(signal);
+      assert.equal(handlers.get(signal), handler);
+      handlers.delete(signal);
+    },
+  };
+
+  await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "600000",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    signals,
+    runTask: async () => {
+      handlers.get("SIGTERM")?.();
+      return {
+        ok: true,
+        base_ref: "HEAD",
+        status: "",
+        diff_truncated: false,
+        planner_text: "done",
+        opencode_exit_code: 0,
+      };
+    },
+  });
+
+  assert.deepEqual(removed.sort(), ["SIGINT", "SIGTERM"]);
+  assert.equal(handlers.size, 0);
 });
 
 test("createTaskQueue tolerates malformed runner state files", async () => {

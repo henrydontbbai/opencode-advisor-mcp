@@ -59,6 +59,8 @@ OPENCODE_ADVISOR_TIMEOUT_MS = "300000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 ```
 
+`OPENCODE_ADVISOR_ALLOWED_ROOTS` is required. The MCP server now fails fast at startup if it is missing or empty.
+
 Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or the outer MCP tool will time out before the inner OpenCode run finishes.
 
 Queue files are stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
@@ -98,6 +100,7 @@ npm install --prefix <runtime-dir>
 
 - Only set `OPENCODE_ADVISOR_ALLOWED_ROOTS` to directories you are willing to expose to the configured OpenCode runtime.
 - Do not point it at broad parent directories by default.
+- Diff context now goes through a conservative best-effort secret redaction pass before it is sent to OpenCode, but that does not replace your own repository hygiene or disclosure judgment.
 - The bundled advisor blocks writes and denies `.env` reads, but that does not replace repository-level access control.
 
 ## Common Failures

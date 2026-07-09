@@ -67,6 +67,11 @@ export function getOpenCodeTask(input = {}, deps = {}) {
 }
 
 export function createServer(deps = {}) {
+  const allowedRoots = parseAllowedRoots(undefined, deps.env ?? process.env, deps.path ?? undefined);
+  if (allowedRoots.length === 0) {
+    throw new Error("OPENCODE_ADVISOR_ALLOWED_ROOTS must be configured before the MCP server starts.");
+  }
+
   const server = new McpServer({ name: "opencode-advisor", version: "0.2.0" });
 
   const commonInput = {

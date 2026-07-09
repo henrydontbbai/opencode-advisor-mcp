@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
   getQueueConfig,
   processQueueOnce,
   readTaskFile,
+  runQueueRunner,
   writeTaskFile,
 } from "../src/task-queue.mjs";
 
@@ -57,6 +58,30 @@ test("ensureQueueRunner normalizes a relative queue override before spawning the
     path.resolve(relativeQueueDir),
   );
   assert.equal(spawnOptions.cwd, path.resolve(relativeQueueDir));
+});
+
+test("ensureQueueRunner writes runner logs when a queue log directory is configured", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-logs-"));
+  const logDir = mkdtempSync(path.join(os.tmpdir(), "ocq-runner-logs-"));
+  let spawnOptions;
+
+  await ensureQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_LOG_DIR: logDir,
+    },
+    platform: process.platform,
+    spawnProcess: (_command, _args, options) => {
+      spawnOptions = options;
+      return { unref() {} };
+    },
+    nodeExec: process.execPath,
+  });
+
+  assert.equal(spawnOptions.stdio[0], "ignore");
+  assert.notEqual(spawnOptions.stdio[1], "ignore");
+  assert.notEqual(spawnOptions.stdio[2], "ignore");
+  assert.equal(spawnOptions.env.OPENCODE_ADVISOR_QUEUE_LOG_DIR, logDir);
 });
 
 test("processQueueOnce respects per-role and global limits", async () => {
@@ -361,6 +386,65 @@ test("createTaskQueue returns queue_full without spawning the runner", async () 
   assert.equal(spawnCalled, false);
 });
 
+test("createTaskQueue enforces maxPending atomically across concurrent submissions", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  let spawnCount = 0;
+  const queue = createTaskQueue({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_MAX_PENDING: "1",
+      OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS: "1",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      return { unref() {} };
+    },
+  });
+
+  const [first, second] = await Promise.all([
+    queue.submitAndWait({ role: "planner", input: { current_plan: "one" } }),
+    queue.submitAndWait({ role: "reviewer", input: { question: "two" } }),
+  ]);
+
+  const queueFullCount = [first, second].filter((item) => item?.details?.status === "queue_full").length;
+  const queueFiles = readdirSync(queueDir).filter((name) => name.endsWith(".json") && !name.startsWith("_"));
+
+  assert.equal(queueFullCount, 1);
+  assert.equal(spawnCount, 1);
+  assert.equal(queueFiles.length, 1);
+});
+
+test("createTaskQueue recovers from a stale submission lock", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const staleLockPath = path.join(queueDir, "_submit.lock");
+  writeFileSync(staleLockPath, "stale\n", "utf8");
+  const oldDate = new Date(Date.now() - 15000);
+  utimesSync(staleLockPath, oldDate, oldDate);
+
+  let spawnCalled = false;
+  const queue = createTaskQueue({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS: "1",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCalled = true;
+      return { unref() {} };
+    },
+  });
+
+  const result = await queue.submitAndWait({ role: "planner", input: { current_plan: "recover stale lock" } });
+  const queueFiles = readdirSync(queueDir).filter((name) => name.endsWith(".json") && !name.startsWith("_"));
+
+  assert.equal(result.error, "queued");
+  assert.equal(spawnCalled, true);
+  assert.equal(queueFiles.length, 1);
+});
+
 test("createTaskQueue ignores TTL-expired pending tasks when checking queue_full", async () => {
   const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
   const oldIso = new Date(Date.now() - 5000).toISOString();
@@ -418,7 +502,6 @@ test("createTaskQueue tolerates concurrent runner-state reads during parallel su
   });
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const { runQueueRunner } = await import("../src/task-queue.mjs");
   const runnerPromise = runQueueRunner({
     env,
     platform: process.platform,
@@ -448,6 +531,65 @@ test("createTaskQueue tolerates concurrent runner-state reads during parallel su
 
   assert.equal(submissions.length, 6);
   assert.equal(submissions.some((item) => item?.error === "queued"), true);
+});
+
+test("writeTaskFile persists task files atomically", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const task = createTaskFile({
+    id: "ocq_atomicwrite",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "atomic" },
+  });
+
+  await writeTaskFile(queueDir, task);
+
+  const entries = readdirSync(queueDir).filter((name) => name.includes("atomicwrite"));
+  assert.deepEqual(entries, ["ocq_atomicwrite.json"]);
+});
+
+test("runQueueRunner exits promptly after SIGTERM once the current task finishes", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const task = createTaskFile({
+    id: "ocq_shutdown",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "shutdown" },
+  });
+  await writeTaskFile(queueDir, task);
+
+  let stopHandler;
+  let slept = false;
+  const runnerPromise = runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "600000",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    runTask: async () => ({
+      ok: true,
+      base_ref: "HEAD",
+      status: "",
+      diff_truncated: false,
+      planner_text: "done",
+      opencode_exit_code: 0,
+    }),
+    sleep: async () => {
+      slept = true;
+      throw new Error("runner should not keep sleeping after shutdown is requested");
+    },
+    signals: {
+      on: (signal, handler) => {
+        if (signal === "SIGTERM") stopHandler = handler;
+      },
+    },
+  });
+
+  assert.equal(typeof stopHandler, "function");
+  stopHandler();
+  await runnerPromise;
+  const saved = await readTaskFile(queueDir, "ocq_shutdown");
+  assert.equal(saved.status, "completed");
+  assert.equal(slept, false);
 });
 
 test("createTaskQueue tolerates malformed runner state files", async () => {

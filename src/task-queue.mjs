@@ -12,6 +12,7 @@ const RUNNER_LOCK_FILENAME = "_runner.lock";
 const RUNNER_STATE_FILENAME = "_runner.json";
 const RUNNER_SCRIPT_PATH = fileURLToPath(new URL("./queue-runner.mjs", import.meta.url));
 const TASK_ID_PATTERN = /^ocq_[A-Za-z0-9]+$/;
+const SUBMISSION_LOCK_STALE_MS = 10000;
 
 function isoFrom(value) {
   return new Date(value).toISOString();
@@ -68,7 +69,19 @@ async function readJsonIfExists(filePath) {
 }
 
 async function writeJson(filePath, value) {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const tempPath = `${filePath}.${randomUUID()}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rename(tempPath, filePath);
+      return;
+    } catch (error) {
+      if (!["EPERM", "EACCES"].includes(error?.code) || attempt === 4) {
+        throw error;
+      }
+      await delay(5 * (attempt + 1));
+    }
+  }
 }
 
 function getDefaultQueueDir(env = process.env, platform = process.platform) {
@@ -83,6 +96,14 @@ function getDefaultQueueDir(env = process.env, platform = process.platform) {
     os.homedir();
 
   return pathApi.join(home, ".codex", "opencode-advisor", "queue");
+}
+
+function getQueueLogDir(env = process.env, platform = process.platform) {
+  const configured = env.OPENCODE_ADVISOR_QUEUE_LOG_DIR;
+  if (!configured) {
+    return null;
+  }
+  return pathForPlatform(platform).resolve(configured);
 }
 
 function roleLimit(role, config) {
@@ -217,6 +238,55 @@ async function listTaskFiles(queueDir) {
 
 async function readRunnerState(queueDir) {
   return readJsonIfExists(runnerStatePath(queueDir));
+}
+
+async function withSubmissionLock(queueDir, fn) {
+  const lockPath = path.join(queueDir, "_submit.lock");
+  for (;;) {
+    try {
+      const handle = await fs.open(lockPath, "wx");
+      try {
+        return await fn();
+      } finally {
+        await handle.close();
+        await fs.unlink(lockPath).catch(() => {});
+      }
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      try {
+        const stats = await fs.stat(lockPath);
+        if (Date.now() - stats.mtimeMs > SUBMISSION_LOCK_STALE_MS) {
+          await fs.unlink(lockPath).catch(() => {});
+          continue;
+        }
+      } catch (statError) {
+        if (statError?.code === "ENOENT") {
+          continue;
+        }
+        throw statError;
+      }
+      await delay(5);
+    }
+  }
+}
+
+async function submitTaskAtomically(queueDir, task, config) {
+  await ensureQueueDir(queueDir);
+  return withSubmissionLock(queueDir, async () => {
+    const now = Date.now();
+    const tasks = await listTaskFiles(queueDir);
+    await recoverOrExpireTasks(queueDir, tasks, config, now);
+    const refreshedTasks = await listTaskFiles(queueDir);
+    const pendingCount = refreshedTasks.filter((entry) => entry.status === "queued" || entry.status === "running").length;
+    if (pendingCount >= config.maxPending) {
+      return { ok: false, result: createQueueFullResponse(config) };
+    }
+
+    await writeTaskFile(queueDir, task);
+    return { ok: true };
+  });
 }
 
 function isRunnerFresh(state, now, config) {
@@ -365,6 +435,7 @@ export function getQueueConfig(env = process.env, platform = process.platform) {
 
   return {
     queueDir: getDefaultQueueDir(env, platform),
+    queueLogDir: getQueueLogDir(env, platform),
     limitGlobal: positiveNumber(env.OPENCODE_ADVISOR_CONCURRENCY_GLOBAL, 4),
     limitPlanner: positiveNumber(env.OPENCODE_ADVISOR_CONCURRENCY_PLANNER, 2),
     limitReviewer: positiveNumber(env.OPENCODE_ADVISOR_CONCURRENCY_REVIEWER, 2),
@@ -458,6 +529,11 @@ export async function ensureQueueRunner({
   nodeExec = process.execPath,
 } = {}) {
   await ensureQueueDir(config.queueDir);
+  let stdoutHandle = null;
+  let stderrHandle = null;
+  if (config.queueLogDir) {
+    await ensureQueueDir(config.queueLogDir);
+  }
   const state = await readRunnerState(config.queueDir);
 
   if (state && isRunnerFresh(state, Date.now(), config)) {
@@ -469,15 +545,27 @@ export async function ensureQueueRunner({
     OPENCODE_ADVISOR_QUEUE_DIR: config.queueDir,
   };
 
-  const child = spawnProcess(nodeExec, [RUNNER_SCRIPT_PATH], {
-    cwd: config.queueDir,
-    env: runnerEnv,
-    detached: true,
-    windowsHide: true,
-    stdio: "ignore",
-  });
-  child.unref();
-  return true;
+  let stdio = "ignore";
+  if (config.queueLogDir) {
+    stdoutHandle = await fs.open(path.join(config.queueLogDir, "runner.stdout.log"), "a");
+    stderrHandle = await fs.open(path.join(config.queueLogDir, "runner.stderr.log"), "a");
+    stdio = ["ignore", stdoutHandle.fd, stderrHandle.fd];
+  }
+
+  try {
+    const child = spawnProcess(nodeExec, [RUNNER_SCRIPT_PATH], {
+      cwd: config.queueDir,
+      env: runnerEnv,
+      detached: true,
+      windowsHide: true,
+      stdio,
+    });
+    child.unref();
+    return true;
+  } finally {
+    await stdoutHandle?.close().catch(() => {});
+    await stderrHandle?.close().catch(() => {});
+  }
 }
 
 export function createTaskQueue({
@@ -490,17 +578,11 @@ export function createTaskQueue({
 
   return {
     async submitAndWait({ role, input }) {
-      const now = Date.now();
-      const tasks = await listTaskFiles(config.queueDir);
-      await recoverOrExpireTasks(config.queueDir, tasks, config, now);
-      const refreshedTasks = await listTaskFiles(config.queueDir);
-      const pendingCount = refreshedTasks.filter((task) => task.status === "queued" || task.status === "running").length;
-      if (pendingCount >= config.maxPending) {
-        return createQueueFullResponse(config);
-      }
-
       const task = createTaskFile({ role, input });
-      await writeTaskFile(config.queueDir, task);
+      const submitted = await submitTaskAtomically(config.queueDir, task, config);
+      if (!submitted.ok) {
+        return submitted.result;
+      }
       await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec });
 
       const deadline = Date.now() + config.inlineWaitMs;
@@ -539,7 +621,15 @@ export async function runQueueRunner({
   platform = process.platform,
   runTask,
   sleep = delay,
+  signals = process,
 } = {}) {
+  let shuttingDown = false;
+  const stop = () => {
+    shuttingDown = true;
+  };
+  signals?.on?.("SIGTERM", stop);
+  signals?.on?.("SIGINT", stop);
+
   const config = getQueueConfig(env, platform);
   const runnerId = `runner_${process.pid}_${Date.now()}`;
   const acquired = await acquireRunnerLock(config.queueDir, config, {
@@ -569,6 +659,10 @@ export async function runQueueRunner({
         now: Date.now(),
         runnerId,
       });
+
+      if (shuttingDown) {
+        break;
+      }
 
       if (cycle.pendingCount === 0) {
         idleSince ??= Date.now();

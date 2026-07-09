@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -150,4 +150,71 @@ test("createTaskQueue rejects unsafe public task ids before any runner work", as
   assert.equal(result.error, "opencode_failed");
   assert.match(result.message, /invalid/i);
   assert.equal(spawnCalled, false);
+});
+
+test("createTaskQueue tolerates concurrent runner-state reads during parallel submissions", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const env = {
+    OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+    OPENCODE_ADVISOR_CONCURRENCY_GLOBAL: "4",
+    OPENCODE_ADVISOR_CONCURRENCY_PLANNER: "2",
+    OPENCODE_ADVISOR_CONCURRENCY_REVIEWER: "2",
+    OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS: "10",
+    OPENCODE_ADVISOR_QUEUE_RETRY_AFTER_MS: "10",
+    OPENCODE_ADVISOR_QUEUE_POLL_MS: "10",
+    OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "50",
+  };
+
+  const queue = createTaskQueue({
+    env,
+    platform: process.platform,
+    spawnProcess: () => ({ unref() {} }),
+  });
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const { runQueueRunner } = await import("../src/task-queue.mjs");
+  const runnerPromise = runQueueRunner({
+    env,
+    platform: process.platform,
+    runTask: async (task) => {
+      await sleep(40);
+      return {
+        ok: true,
+        base_ref: "HEAD",
+        status: "",
+        diff_truncated: false,
+        [task.role === "planner" ? "planner_text" : "advisor_text"]: "ok",
+        opencode_exit_code: 0,
+      };
+    },
+  });
+
+  const submissions = await Promise.all([
+    queue.submitAndWait({ role: "planner", input: { current_plan: "p1" } }),
+    queue.submitAndWait({ role: "planner", input: { current_plan: "p2" } }),
+    queue.submitAndWait({ role: "planner", input: { current_plan: "p3" } }),
+    queue.submitAndWait({ role: "reviewer", input: { question: "r1" } }),
+    queue.submitAndWait({ role: "reviewer", input: { question: "r2" } }),
+    queue.submitAndWait({ role: "reviewer", input: { question: "r3" } }),
+  ]);
+
+  await runnerPromise;
+
+  assert.equal(submissions.length, 6);
+  assert.equal(submissions.some((item) => item?.error === "queued"), true);
+});
+
+test("createTaskQueue tolerates malformed runner state files", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  writeFileSync(path.join(queueDir, "_runner.json"), "", "utf8");
+
+  const queue = createTaskQueue({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => ({ unref() {} }),
+  });
+
+  const result = await queue.getTaskResult({ task_id: "ocq_missingtask" });
+  assert.equal(result.ok, false);
+  assert.notEqual(result.message?.length, 0);
 });

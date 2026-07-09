@@ -38,15 +38,33 @@ async function ensureQueueDir(queueDir) {
 }
 
 async function readJsonIfExists(filePath) {
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw);
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      return null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      if (!raw.trim()) {
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          continue;
+        }
+        return null;
+      }
+      return JSON.parse(raw);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return null;
+      }
+      if (error instanceof SyntaxError && attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        continue;
+      }
+      if (error instanceof SyntaxError) {
+        return null;
+      }
+      throw error;
     }
-    throw error;
   }
+
+  return null;
 }
 
 async function writeJson(filePath, value) {

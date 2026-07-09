@@ -129,6 +129,15 @@ Queue defaults are conservative:
 - inline wait: `60000ms`
 - retry hint: `30000ms`
 
+Queue config env knobs currently supported:
+
+- `OPENCODE_ADVISOR_QUEUE_MAX_PENDING`
+- `OPENCODE_ADVISOR_TASK_TTL_MS`
+- `OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS`
+- `OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS`
+- `OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS`
+- `OPENCODE_ADVISOR_QUEUE_POLL_MS`
+
 Queue state is stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
 
 If you set `OPENCODE_ADVISOR_QUEUE_LOG_DIR`, detached runner stdout/stderr is written there for local diagnosis instead of being discarded.

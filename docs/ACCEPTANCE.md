@@ -153,6 +153,17 @@ Queued path:
 If an ask tool returns { ok:false, error:"queued" }, keep the phase pending and call get_opencode_task with the returned task_id.
 ```
 
+Queue env coverage to keep documented and testable:
+
+```text
+OPENCODE_ADVISOR_QUEUE_MAX_PENDING
+OPENCODE_ADVISOR_TASK_TTL_MS
+OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS
+OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS
+OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS
+OPENCODE_ADVISOR_QUEUE_POLL_MS
+```
+
 Manual queued-path poll:
 
 ```text

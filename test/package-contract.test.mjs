@@ -20,6 +20,11 @@ test("default npm test excludes doctor-specific test coverage", () => {
   assert.equal(packageJson.scripts["test:doctor"], "node --test test/doctor.test.mjs");
 });
 
+test("smoke script verifies both startup success with allowed roots and startup failure without them", () => {
+  assert.match(packageJson.scripts.smoke, /createServer\(\{ env \}\)/);
+  assert.match(packageJson.scripts.smoke, /createServer\(\{ env: \{\} \}\)/);
+});
+
 test("doctor stays out of the published CLI and files contract", () => {
   assert.equal(
     Object.values(packageJson.bin).includes("scripts/opencode-advisor-doctor.mjs"),

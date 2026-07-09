@@ -46,6 +46,7 @@ Before using this tool:
 - Keep `OPENCODE_ADVISOR_ALLOWED_ROOTS` narrow
 
 This tool blocks `.env` reads in the bundled advisor template, but it does not guarantee that every secret in a repository is protected from review context.
+Current builds apply a conservative best-effort secret redaction pass to diff context before it is sent to OpenCode. Treat that as a fallback safety layer, not as proof that every sensitive value is caught.
 
 ## Response Shape
 
@@ -106,6 +107,7 @@ Default queue policy:
 Queue files live under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
 
 If you set `OPENCODE_ADVISOR_QUEUE_DIR`, that value is used as the queue directory directly.
+If you set `OPENCODE_ADVISOR_QUEUE_LOG_DIR`, detached runner stdout/stderr is captured there for local diagnosis.
 
 ## Notes
 

@@ -133,6 +133,7 @@ Expected:
 - `ok: true`
 - success response does not expose an absolute local `cwd`
 - success response does not expose raw stderr tail
+- if diff context includes obvious token-like values, the prompt path should redact them before provider handoff
 
 Planner path:
 

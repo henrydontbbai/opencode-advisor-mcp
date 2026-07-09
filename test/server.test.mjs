@@ -54,6 +54,13 @@ test("parseAllowedRoots defaults to no allowed roots when env is unset", () => {
   assert.deepEqual(parseAllowedRoots(undefined, {}), []);
 });
 
+test("createServer rejects startup when allowed roots are not configured", () => {
+  assert.throws(
+    () => createServer({ env: {}, platform: "win32" }),
+    /OPENCODE_ADVISOR_ALLOWED_ROOTS/i,
+  );
+});
+
 test("isPathInsideAllowedRoots accepts child paths and rejects sibling prefixes", () => {
   const roots = parseAllowedRoots(WINDOWS_ALLOWED_ROOT, {}, path.win32);
   assert.equal(isPathInsideAllowedRoots(WINDOWS_CHILD_REPO, roots, path.win32), true);
@@ -410,6 +417,51 @@ test("askOpenCodeAdvisor applies max diff chars from env", async () => {
 
   assert.equal(result.ok, true);
   assert.equal(result.diff_truncated, true);
+});
+
+test("askOpenCodeAdvisor redacts common secrets before sending diff context to OpenCode", async () => {
+  const { runProcess, calls } = createMockRunProcess({
+    git: {
+      "status --short": { code: 0, stdout: " M .env\n", stderr: "", timedOut: false },
+      "diff --stat HEAD --": { code: 0, stdout: " .env | 4 ++--", stderr: "", timedOut: false },
+      "diff HEAD --": {
+        code: 0,
+        stdout: [
+          "diff --git a/.env b/.env",
+          "+++ b/.env",
+          "+GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz1234567890",
+          "+AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF",
+          '+API_KEY="super-secret-value"',
+          "+-----BEGIN PRIVATE KEY-----",
+          "+line-one",
+          "+line-two",
+          "+-----END PRIVATE KEY-----",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+      "diff --cached --stat --": { code: 0, stdout: "", stderr: "", timedOut: false },
+      "diff --cached --": { code: 0, stdout: "", stderr: "", timedOut: false },
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: "/repo" },
+    {
+      runProcess,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+      platform: "linux",
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, true);
+  const opencodeCall = calls.find((call) => call.command === "opencode");
+  assert.equal(opencodeCall.options.input.includes("ghp_abcdefghijklmnopqrstuvwxyz1234567890"), false);
+  assert.equal(opencodeCall.options.input.includes("AKIA1234567890ABCDEF"), false);
+  assert.equal(opencodeCall.options.input.includes("super-secret-value"), false);
+  assert.equal(opencodeCall.options.input.includes("line-one"), false);
+  assert.match(opencodeCall.options.input, /\[REDACTED_SECRET\]/);
 });
 
 test("askOpenCodeAdvisor returns git_failed when git command fails", async () => {

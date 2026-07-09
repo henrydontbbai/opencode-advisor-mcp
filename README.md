@@ -24,6 +24,7 @@ Important boundaries:
 
 - The server sends Git status, optional Git diff context, your question, plan text, constraints, and working-directory context to your configured OpenCode runtime.
 - Depending on your OpenCode configuration, that runtime may use a remote model provider. Do not assume this means "nothing ever leaves the machine."
+- Public responses stay脱敏, but review context can still include repository content. This build now applies a conservative best-effort secret redaction pass to diff context before sending it to OpenCode; treat that as a safety net, not as a guarantee.
 - The included advisor template blocks writes and denies `.env` reads, but that is not a complete confidentiality guarantee.
 - Keep `OPENCODE_ADVISOR_ALLOWED_ROOTS` narrow. Do not point it at broad parent directories unless you deliberately want that scope.
 
@@ -129,6 +130,8 @@ Queue defaults are conservative:
 - retry hint: `30000ms`
 
 Queue state is stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
+
+If you set `OPENCODE_ADVISOR_QUEUE_LOG_DIR`, detached runner stdout/stderr is written there for local diagnosis instead of being discarded.
 
 If you override `OPENCODE_ADVISOR_QUEUE_DIR`, it is treated as the queue directory itself rather than as a parent folder.
 

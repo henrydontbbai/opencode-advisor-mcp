@@ -15,6 +15,9 @@ import {
 export const INVALID_CWD_MESSAGE = "cwd is outside configured allowed roots";
 export const GIT_FAILED_MESSAGE = "Git context collection failed";
 export const OPENCODE_NOT_FOUND_MESSAGE = "OpenCode command could not be started";
+const PEM_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g;
+const SECRET_TOKEN_PATTERN = /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/g;
+const SECRET_ASSIGNMENT_PATTERN = /^([+\- ]?(?:.*?(?:token|secret|api[_-]?key|password|pass|private[_-]?key|access[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*))(.*)$/gim;
 
 export function parseAllowedRoots(input, env = process.env, pathApi = path) {
   const source = input ?? env.OPENCODE_ADVISOR_ALLOWED_ROOTS ?? "";
@@ -48,6 +51,19 @@ export function truncateText(text, maxChars) {
     text: `${text.slice(0, maxChars)}\n\n[truncated: ${text.length - maxChars} chars omitted]`,
     truncated: true,
   };
+}
+
+function shouldRedactSecrets(env = process.env) {
+  const value = env.OPENCODE_ADVISOR_REDACT_SECRETS;
+  if (value == null) return true;
+  return !/^(0|false|off|no)$/i.test(String(value).trim());
+}
+
+function redactSensitiveText(text) {
+  return String(text)
+    .replace(PEM_BLOCK_PATTERN, "[REDACTED_SECRET]")
+    .replace(SECRET_ASSIGNMENT_PATTERN, (_match, prefix) => `${prefix}[REDACTED_SECRET]`)
+    .replace(SECRET_TOKEN_PATTERN, "[REDACTED_SECRET]");
 }
 
 function stripModelReasoning(text) {
@@ -200,7 +216,9 @@ async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, pat
   sections.push(`## git diff --cached\n${await runGit(cwd, ["diff", "--cached", ...pathspec], deps)}`);
 
   const maxChars = positiveNumber(maxDiffChars, DEFAULT_MAX_DIFF_CHARS);
-  const truncated = truncateText(sections.join("\n\n"), maxChars);
+  const combinedDiff = sections.join("\n\n");
+  const sanitizedDiff = shouldRedactSecrets(deps.env) ? redactSensitiveText(combinedDiff) : combinedDiff;
+  const truncated = truncateText(sanitizedDiff, maxChars);
   return { status, diff: truncated.text, diffTruncated: truncated.truncated };
 }
 

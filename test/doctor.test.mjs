@@ -10,6 +10,7 @@ import {
 
 const WINDOWS_ALLOWED_ROOT = "C:\\workspace\\repo-root";
 const WINDOWS_CHILD_REPO = `${WINDOWS_ALLOWED_ROOT}\\project`;
+const WINDOWS_DATA_HOME = "C:\\Users\\codex\\opencode-advisor-data";
 
 function createCommandResult(overrides = {}) {
   return {
@@ -110,6 +111,30 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
     useQueue: false,
   });
   assert.equal(report.steps.every((step) => step.ok), true);
+});
+
+test("runDoctor directs explicit profile checks to the dedicated data home", async () => {
+  const commandCalls = [];
+  const env = {
+    OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+    OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+  };
+
+  const report = await runDoctor({
+    cwd: WINDOWS_CHILD_REPO,
+    env,
+    platform: "win32",
+    runCommand: async (command, args, options) => {
+      commandCalls.push({ command, args, options });
+      return createCommandResult();
+    },
+    askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload(),
+    askOpenCodePlannerImpl: async () => createCanonicalPlannerSuccessPayload(),
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(commandCalls.length, 2);
+  assert.equal(commandCalls[0].options.env.XDG_DATA_HOME, undefined);
 });
 
 test("runDoctor classifies missing opencode command", async () => {

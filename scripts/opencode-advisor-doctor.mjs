@@ -5,9 +5,8 @@ import {
   askOpenCodeAdvisor,
   askOpenCodePlanner,
   extractOpenCodeText,
-  getOpenCodeDataHome,
 } from "../src/server.mjs";
-import { runProcess } from "../src/opencode-core.mjs";
+import { getOpenCodeDataHome, runProcess } from "../src/opencode-core.mjs";
 import {
   DEFAULT_TIMEOUT_MS,
   PLANNER_SUCCESS_RESPONSE_KEYS,
@@ -34,6 +33,13 @@ const runCommand = runProcess;
 
 function unique(items) {
   return [...new Set(items)];
+}
+
+export function getDoctorOpenCodeEnv(env = process.env, pathApi) {
+  return {
+    ...env,
+    XDG_DATA_HOME: getOpenCodeDataHome(env, pathApi),
+  };
 }
 
 export function findPayloadLeaks(payload, { role = "reviewer", cwd } = {}) {
@@ -223,8 +229,7 @@ export async function runDoctor({
   const steps = [];
   let directEnv = env;
   if (runCommandImpl === runCommand) {
-    const dataHome = getOpenCodeDataHome(env);
-    directEnv = { ...env, XDG_DATA_HOME: dataHome };
+    directEnv = getDoctorOpenCodeEnv(env);
   }
   const opencodeCommand = resolveOpencodeCommand(env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", { env, platform, exists });
 

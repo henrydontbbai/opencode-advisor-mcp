@@ -17,6 +17,8 @@ export const INVALID_CWD_MESSAGE = "cwd is outside configured allowed roots";
 export const GIT_FAILED_MESSAGE = "Git context collection failed";
 export const OPENCODE_NOT_FOUND_MESSAGE = "OpenCode command could not be started";
 export const DEFAULT_MAX_PROCESS_OUTPUT_CHARS = 1024 * 1024;
+const PROCESS_TERMINATION_FORCE_GRACE_MS = 100;
+const PROCESS_TERMINATION_SETTLE_GRACE_MS = 100;
 const PEM_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g;
 const SECRET_TOKEN_PATTERN = /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/g;
 const SECRET_ASSIGNMENT_PATTERN = /^([+\- ]?(?:.*?(?:token|secret|api[_-]?key|password|pass|private[_-]?key|access[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*))(.*)$/gim;
@@ -157,6 +159,76 @@ function isSpawnError(error) {
   return /ENOENT|not recognized/i.test(String(error?.code || error?.message || error));
 }
 
+function terminateProcessTree(child, platform, terminationSpawnImpl) {
+  if (!Number.isInteger(child.pid)) {
+    try {
+      child.kill();
+    } catch {}
+    return Promise.resolve();
+  }
+
+  if (platform === "win32") {
+    return new Promise((resolve) => {
+      let finished = false;
+      let settleTimer;
+      const terminateChild = () => {
+        try {
+          child.kill();
+        } catch {}
+      };
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(settleTimer);
+        resolve();
+      };
+      const finishAfterSettleGrace = () => {
+        if (finished || settleTimer) return;
+        settleTimer = setTimeout(finish, PROCESS_TERMINATION_SETTLE_GRACE_MS);
+      };
+
+      try {
+        const taskkill = terminationSpawnImpl("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        taskkill.once("error", () => {
+          terminateChild();
+          finishAfterSettleGrace();
+        });
+        taskkill.once("close", (code) => {
+          if (code !== 0) terminateChild();
+          finishAfterSettleGrace();
+        });
+      } catch {
+        terminateChild();
+        finishAfterSettleGrace();
+      }
+    });
+  }
+
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    try {
+      child.kill("SIGTERM");
+    } catch {}
+  }
+
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+      }
+      setTimeout(resolve, PROCESS_TERMINATION_SETTLE_GRACE_MS);
+    }, PROCESS_TERMINATION_FORCE_GRACE_MS);
+  });
+}
+
 export function runProcess(
   command,
   args,
@@ -168,6 +240,7 @@ export function runProcess(
     env = process.env,
     platform = process.platform,
     spawnImpl = spawn,
+    terminationSpawnImpl = spawn,
   } = {},
 ) {
   return new Promise((resolve, reject) => {
@@ -176,6 +249,7 @@ export function runProcess(
       cwd,
       env,
       shell: needsShell,
+      detached: platform !== "win32",
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -187,20 +261,46 @@ export function runProcess(
     let timedOut = false;
     let outputTruncated = false;
     let settled = false;
-    const stopChild = () => {
-      try {
-        child.kill();
-      } catch {}
+    let settlementRequested = false;
+    let streamsFlushed = false;
+    let terminationPromise;
+    const flushStreams = () => {
+      if (streamsFlushed) return;
+      streamsFlushed = true;
+      const stdoutOutput = appendOutput(stdout, stdoutDecoder.end(), maxOutputChars);
+      stdout = stdoutOutput.text;
+      outputTruncated ||= stdoutOutput.truncated;
+      const stderrOutput = appendOutput(stderr, stderrDecoder.end(), maxOutputChars);
+      stderr = stderrOutput.text;
+      outputTruncated ||= stderrOutput.truncated;
     };
-    const settle = (callback, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      callback(value);
+    const createResult = (code) => {
+      flushStreams();
+      return { code, stdout, stderr, timedOut, outputTruncated };
+    };
+    const stopChild = () => {
+      terminationPromise ??= terminateProcessTree(child, platform, terminationSpawnImpl);
+      return terminationPromise;
+    };
+    const settle = (callback, createValue) => {
+      if (settled || settlementRequested) return;
+      settlementRequested = true;
+      const complete = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        callback(createValue());
+      };
+      if (terminationPromise) {
+        terminationPromise.then(complete, complete);
+      } else {
+        complete();
+      }
     };
     const timer = setTimeout(() => {
       timedOut = true;
       stopChild();
+      settle(resolve, () => createResult(null));
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
@@ -214,34 +314,33 @@ export function runProcess(
       outputTruncated ||= output.truncated;
     });
     child.stdout.on("error", (error) => {
+      if (settled || settlementRequested) return;
       stopChild();
-      settle(reject, error);
+      settle(reject, () => error);
     });
     child.stderr.on("error", (error) => {
+      if (settled || settlementRequested) return;
       stopChild();
-      settle(reject, error);
+      settle(reject, () => error);
     });
     child.on("error", (error) => {
-      settle(reject, error);
+      settle(reject, () => error);
     });
     child.on("close", (code) => {
-      const stdoutOutput = appendOutput(stdout, stdoutDecoder.end(), maxOutputChars);
-      stdout = stdoutOutput.text;
-      outputTruncated ||= stdoutOutput.truncated;
-      const stderrOutput = appendOutput(stderr, stderrDecoder.end(), maxOutputChars);
-      stderr = stderrOutput.text;
-      outputTruncated ||= stderrOutput.truncated;
-      settle(resolve, { code, stdout, stderr, timedOut, outputTruncated });
+      settle(resolve, () => createResult(code));
     });
 
-    child.stdin.on("error", (error) => {
-      settle(reject, error);
-    });
+    const handleStdinError = (error) => {
+      if (settled || settlementRequested) return;
+      stopChild();
+      settle(reject, () => error);
+    };
+    child.stdin.on("error", handleStdinError);
     if (input) child.stdin.write(input, (error) => {
-      if (error) settle(reject, error);
+      if (error) handleStdinError(error);
     });
     child.stdin.end((error) => {
-      if (error) settle(reject, error);
+      if (error) handleStdinError(error);
     });
   });
 }

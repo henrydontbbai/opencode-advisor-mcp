@@ -19,8 +19,19 @@ Status meanings:
 | #51 | covered | runner now handles shutdown and exits cleanly after the current task | `src/task-queue.mjs`, tests on `main` |
 | #53 | covered | queue runner stdout/stderr can now be captured via log dir | `src/task-queue.mjs`, docs on `main` |
 | #54 | covered | MCP stdio integration tests now exist | `test/mcp-integration.test.mjs`, merged in `#81` |
+| #57 | covered | task files now write through a temporary file and atomic rename | `src/task-queue.mjs`, merged in `#80` |
+| #59 | covered | quoted Windows roots can preserve literal semicolons | `src/opencode-core.mjs`, merged in `#83` |
+| #63 | covered | diff context truncation preserves complete lines | `src/opencode-core.mjs`, merged in `#83` |
+| #64 | covered | Git context now degrades per command instead of failing as a whole | `src/opencode-core.mjs`, merged in `#83` |
+| #65 | covered | queue-dir permission failures now degrade to a structured error instead of looking like a dropped connection | `src/task-queue.mjs`, merged in `#82` |
+| #66 | covered | stale thresholds no longer shrink below the built-in floor just because timeout is reduced | `src/task-queue.mjs`, merged in `#82` |
+| #67 | covered | `get_opencode_task` now has explicit behavior when queue mode is disabled | `src/server.mjs`, merged in `#82` |
+| #68 | covered | install docs now include Bash/macOS/Linux-friendly examples alongside PowerShell | `README.md`, merged in `#82` |
+| #69 | covered | public docs now state prerequisites and current validated OpenCode CLI version | `README.md`, `docs/INSTALL.md`, `docs/USAGE.md`, merged in `#82` |
 | #75 | covered | doctor now checks both bundled agents and both MCP health paths | `scripts/opencode-advisor-doctor.mjs`, `test/doctor.test.mjs` |
 | #76 | covered | queue admission already uses a submission lock and atomic maxPending check | `src/task-queue.mjs`, `test/queue.test.mjs` |
+| #78 | covered | bug template now requests doctor output, agent status, MCP config, install mode, and redaction guidance | `.github/ISSUE_TEMPLATE/bug_report.yml`, merged in `#82` |
+| #79 | covered | package-contract tests now validate the real tarball contents and package-lock root metadata drift | `test/package-contract.test.mjs`, merged in `#82` |
 
 ## Duplicate / Consolidate
 
@@ -30,20 +41,6 @@ Status meanings:
 | #60 | duplicate | #19 | same allowed-roots canonicalization / symlink bypass family |
 | #24 | duplicate | #43 | broad audit follow-up umbrella, less actionable than the later audit issue |
 | #11 | duplicate | #43 | older umbrella audit issue with overlapping findings |
-
-## Covered In This Maintenance Branch
-
-These are implemented in `codex/issue-governance-maintenance` and should close on merge.
-
-| Issue | Status | Reason | Evidence |
-|---|---|---|---|
-| #65 | covered | queue-dir permission failures now degrade to a structured error instead of looking like a dropped connection | `src/task-queue.mjs`, `test/queue.test.mjs` |
-| #66 | covered | stale thresholds no longer shrink below the built-in floor just because timeout is reduced | `src/task-queue.mjs`, `test/queue.test.mjs` |
-| #67 | covered | `get_opencode_task` now has explicit behavior when queue mode is disabled | `src/server.mjs`, `test/server.test.mjs` |
-| #68 | covered | install docs now include Bash/macOS/Linux-friendly examples alongside PowerShell | `README.md`, `docs/INSTALL.md` |
-| #69 | covered | public docs now state prerequisites and current validated OpenCode CLI version | `README.md`, `docs/INSTALL.md`, `docs/USAGE.md` |
-| #78 | covered | bug template now requests doctor output, agent status, MCP config, install mode, and redaction guidance | `.github/ISSUE_TEMPLATE/bug_report.yml` |
-| #79 | covered | package-contract tests now validate the real tarball contents and package-lock root metadata drift | `test/package-contract.test.mjs` |
 
 ## Deferred
 

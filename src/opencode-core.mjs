@@ -19,11 +19,30 @@ const PEM_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+
 const SECRET_TOKEN_PATTERN = /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/g;
 const SECRET_ASSIGNMENT_PATTERN = /^([+\- ]?(?:.*?(?:token|secret|api[_-]?key|password|pass|private[_-]?key|access[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*))(.*)$/gim;
 
+function splitAllowedRootEntries(source) {
+  const entries = [];
+  let current = "";
+  let quoted = false;
+
+  for (const character of source) {
+    if (character === "\"") {
+      quoted = !quoted;
+    } else if (character === ";" && !quoted) {
+      entries.push(current);
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+
+  entries.push(current);
+  return entries;
+}
+
 export function parseAllowedRoots(input, env = process.env, pathApi = path) {
   const source = input ?? env.OPENCODE_ADVISOR_ALLOWED_ROOTS ?? "";
 
-  return source
-    .split(";")
+  return splitAllowedRootEntries(source)
     .map((entry) => entry.trim())
     .filter(Boolean)
     .map((entry) => pathApi.resolve(entry));
@@ -47,8 +66,12 @@ export function truncateText(text, maxChars) {
     return { text, truncated: false };
   }
 
+  const lastLineBreak = text.lastIndexOf("\n", maxChars - 1);
+  const cutoff = lastLineBreak === -1 ? 0 : lastLineBreak + 1;
+  const visible = text.slice(0, cutoff);
+
   return {
-    text: `${text.slice(0, maxChars)}\n\n[truncated: ${text.length - maxChars} chars omitted]`,
+    text: `${visible}${visible ? "\n" : ""}[truncated: ${text.length - cutoff} chars omitted]`,
     truncated: true,
   };
 }
@@ -200,20 +223,50 @@ async function runGit(cwd, args, deps) {
   return result.stdout.trim();
 }
 
+async function collectGitSection(cwd, args, deps) {
+  try {
+    return { ok: true, output: await runGit(cwd, args, deps) };
+  } catch {
+    return { ok: false, output: "" };
+  }
+}
+
 async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, paths, maxDiffChars, deps }) {
   const safePaths = normalizeReviewPaths(paths, deps.path);
   const pathspec = ["--", ...safePaths];
-  const status = includeStatus ? await runGit(cwd, ["status", "--short"], deps) : "";
+  let successfulCommands = 0;
+  let status = "";
+
+  if (includeStatus) {
+    const statusResult = await collectGitSection(cwd, ["status", "--short"], deps);
+    if (statusResult.ok) {
+      successfulCommands += 1;
+      status = statusResult.output;
+    }
+  }
 
   if (!includeDiff) {
+    if (includeStatus && successfulCommands === 0) {
+      throw new Error("Git status collection failed");
+    }
     return { status, diff: "", diffTruncated: false };
   }
 
   const sections = [];
-  sections.push(`## git diff --stat ${baseRef}\n${await runGit(cwd, ["diff", "--stat", baseRef, ...pathspec], deps)}`);
-  sections.push(`## git diff ${baseRef}\n${await runGit(cwd, ["diff", baseRef, ...pathspec], deps)}`);
-  sections.push(`## git diff --cached --stat\n${await runGit(cwd, ["diff", "--cached", "--stat", ...pathspec], deps)}`);
-  sections.push(`## git diff --cached\n${await runGit(cwd, ["diff", "--cached", ...pathspec], deps)}`);
+  for (const [heading, args] of [
+    [`## git diff --stat ${baseRef}`, ["diff", "--stat", baseRef, ...pathspec]],
+    [`## git diff ${baseRef}`, ["diff", baseRef, ...pathspec]],
+    ["## git diff --cached --stat", ["diff", "--cached", "--stat", ...pathspec]],
+    ["## git diff --cached", ["diff", "--cached", ...pathspec]],
+  ]) {
+    const section = await collectGitSection(cwd, args, deps);
+    if (section.ok) successfulCommands += 1;
+    sections.push(`${heading}\n${section.ok ? section.output : "[unavailable]"}`);
+  }
+
+  if (successfulCommands === 0) {
+    throw new Error("Git context collection failed");
+  }
 
   const maxChars = positiveNumber(maxDiffChars, DEFAULT_MAX_DIFF_CHARS);
   const combinedDiff = sections.join("\n\n");

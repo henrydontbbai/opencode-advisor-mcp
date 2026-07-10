@@ -51,6 +51,15 @@ test("parseAllowedRoots splits semicolon-separated Windows paths", () => {
   assert.equal(path.win32.basename(roots[1]).toLowerCase(), "allowed-roots");
 });
 
+test("parseAllowedRoots preserves quoted Windows roots containing semicolons", () => {
+  const roots = parseAllowedRoots('"C:\\workspace\\team;alpha"; C:\\workspace\\allowed-roots', {}, path.win32);
+
+  assert.deepEqual(roots, [
+    "C:\\workspace\\team;alpha",
+    "C:\\workspace\\allowed-roots",
+  ]);
+});
+
 test("parseAllowedRoots defaults to no allowed roots when env is unset", () => {
   assert.deepEqual(parseAllowedRoots(undefined, {}), []);
 });
@@ -75,7 +84,16 @@ test("isPathInsideAllowedRoots uses platform case sensitivity", () => {
 
 test("truncateText reports when text is truncated", () => {
   const result = truncateText("abcdef", 4);
-  assert.deepEqual(result, { text: "abcd\n\n[truncated: 2 chars omitted]", truncated: true });
+  assert.deepEqual(result, { text: "[truncated: 6 chars omitted]", truncated: true });
+});
+
+test("truncateText preserves complete diff lines when truncating", () => {
+  const text = "first line\nsecond line\nthird line";
+
+  assert.deepEqual(truncateText(text, 15), {
+    text: "first line\n\n[truncated: 22 chars omitted]",
+    truncated: true,
+  });
 });
 
 test("truncateText does not truncate invalid or boundary max values", () => {
@@ -465,10 +483,43 @@ test("askOpenCodeAdvisor redacts common secrets before sending diff context to O
   assert.match(opencodeCall.options.input, /\[REDACTED_SECRET\]/);
 });
 
+test("askOpenCodeAdvisor preserves successful git context when one diff command fails", async () => {
+  const { runProcess, calls } = createMockRunProcess({
+    git: {
+      "status --short": { code: 0, stdout: " M src/server.mjs\n", stderr: "", timedOut: false },
+      "diff --stat main --": { code: 0, stdout: " src/server.mjs | 1 +", stderr: "", timedOut: false },
+      "diff main --": { code: 1, stdout: "", stderr: "fatal: synthetic diff failure", timedOut: false },
+      "diff --cached --stat --": { code: 0, stdout: " src/server.mjs | 2 ++", stderr: "", timedOut: false },
+      "diff --cached --": { code: 0, stdout: "diff --git a/src/server.mjs b/src/server.mjs", stderr: "", timedOut: false },
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: "/repo", base_ref: "main" },
+    {
+      runProcess,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+      platform: "linux",
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "M src/server.mjs");
+  const opencodeCall = calls.find((call) => call.command === "opencode");
+  assert.match(opencodeCall.options.input, /## git diff --stat main\nsrc\/server\.mjs \| 1 \+/);
+  assert.match(opencodeCall.options.input, /## git diff main\n\[unavailable\]/);
+  assert.match(opencodeCall.options.input, /## git diff --cached\n/);
+});
+
 test("askOpenCodeAdvisor returns git_failed when git command fails", async () => {
   const { runProcess } = createMockRunProcess({
     git: {
       "status --short": { code: 1, stdout: "", stderr: `fatal: cannot access '${WINDOWS_CHILD_REPO}'`, timedOut: false },
+      "diff --stat HEAD --": { code: 1, stdout: "", stderr: "fatal: synthetic diff failure", timedOut: false },
+      "diff HEAD --": { code: 1, stdout: "", stderr: "fatal: synthetic diff failure", timedOut: false },
+      "diff --cached --stat --": { code: 1, stdout: "", stderr: "fatal: synthetic diff failure", timedOut: false },
+      "diff --cached --": { code: 1, stdout: "", stderr: "fatal: synthetic diff failure", timedOut: false },
     },
   });
 

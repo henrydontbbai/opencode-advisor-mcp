@@ -104,6 +104,8 @@ OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 
 Replace `<repo-root>` with the absolute path to this source checkout.
 
+`OPENCODE_ADVISOR_ALLOWED_ROOTS` accepts a semicolon-separated list. If a Windows path itself contains a semicolon, wrap that one path in double quotes, for example `"C:\workspace\team;alpha";C:\workspace\other`.
+
 Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or Codex may cut off the MCP tool before the inner OpenCode timeout is reached.
 
 After the agent template is installed, set allowed roots in the same shell that will run doctor. The terminal check does not inherit MCP env from the Codex config block above.

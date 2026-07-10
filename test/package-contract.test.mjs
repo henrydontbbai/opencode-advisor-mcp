@@ -52,8 +52,9 @@ test("default npm test excludes doctor-specific test coverage", () => {
   assert.equal(packageJson.scripts["test:doctor"], "node --test test/doctor.test.mjs");
 });
 
-test("smoke script verifies both startup success with allowed roots and startup failure without them", () => {
+test("smoke script verifies both startup success with dedicated data home and startup failure without configuration", () => {
   assert.match(packageJson.scripts.smoke, /createServer\(\{ env \}\)/);
+  assert.match(packageJson.scripts.smoke, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/);
   assert.match(packageJson.scripts.smoke, /createServer\(\{ env: \{\} \}\)/);
 });
 

@@ -113,7 +113,7 @@ Current queue env knobs:
 - `OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS`
 - `OPENCODE_ADVISOR_QUEUE_POLL_MS`
 
-Queue files live under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
+Queue files live under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms. On POSIX the server requests owner-only directory and file modes; queue contents remain local files and are not encrypted.
 
 If you set `OPENCODE_ADVISOR_QUEUE_DIR`, that value is used as the queue directory directly.
 If you set `OPENCODE_ADVISOR_QUEUE_LOG_DIR`, detached runner stdout/stderr is captured there for local diagnosis.
@@ -122,7 +122,9 @@ If the queue directory cannot be created or written, the ask/get-task flow shoul
 
 ## Notes
 
-- Each review run creates an OpenCode session record
+- Each review run creates a titled OpenCode session record in the required dedicated `OPENCODE_ADVISOR_OPENCODE_DATA_HOME` profile
+- Authenticate that dedicated profile separately; the server never copies or cleans the user's normal OpenCode database or credentials
+- Managed sessions are retained for 3 days and terminal queue files for 7 days by default; low-frequency cleanup uses only OpenCode session list/delete commands in the dedicated profile
 - The model/provider behavior is controlled by your local OpenCode configuration, not by this repository
 - Current implementation is a one-shot review tool, not a persistent OpenCode server
 - Inner review timeout is controlled by `OPENCODE_ADVISOR_TIMEOUT_MS`; keep outer MCP `tool_timeout_sec` larger so Codex does not truncate the run first
@@ -133,6 +135,7 @@ For source installs, run the local runtime self-check from the repository root:
 
 ```powershell
 $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+$env:OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-opencode-data-home>"
 npm run doctor
 ```
 

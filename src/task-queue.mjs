@@ -4,7 +4,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_TIMEOUT_MS, pathForPlatform, positiveNumber } from "./runtime-shared.mjs";
+import { runProcess } from "./opencode-core.mjs";
+import { DEFAULT_TIMEOUT_MS, pathForPlatform, positiveNumber, resolveOpencodeCommand } from "./runtime-shared.mjs";
 
 const QUEUE_PENDING_MESSAGE =
   "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.";
@@ -17,6 +18,11 @@ const SUBMISSION_LOCK_STALE_MS = 10000;
 const DEFAULT_STALE_FLOOR_MS = DEFAULT_TIMEOUT_MS + 120000;
 const QUEUE_DIR_ERROR_CODES = new Set(["EACCES", "EEXIST", "ENOENT", "ENOTDIR", "EPERM", "EROFS"]);
 const QUEUE_READ_RETRY_CODE = "OPENCODE_ADVISOR_QUEUE_READ_RETRY";
+const DEFAULT_SESSION_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "expired", "timeout"]);
+const SESSION_TITLE_PREFIX = "opencode-advisor:";
 const MAX_CONSECUTIVE_RUNNER_ERRORS = 3;
 const RUNNER_TERMINATION_WAIT_MS = 5000;
 
@@ -48,8 +54,19 @@ function runnerStatePath(queueDir) {
   return path.join(queueDir, RUNNER_STATE_FILENAME);
 }
 
+function maintenanceLockPath(queueDir) {
+  return path.join(queueDir, "_maintenance.lock");
+}
+
+function maintenanceStatePath(queueDir) {
+  return path.join(queueDir, "_maintenance.json");
+}
+
 async function ensureQueueDir(queueDir) {
-  await fs.mkdir(queueDir, { recursive: true });
+  await fs.mkdir(queueDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") {
+    await fs.chmod(queueDir, 0o700);
+  }
 }
 
 async function readJsonIfExists(filePath) {
@@ -84,7 +101,7 @@ async function readJsonIfExists(filePath) {
 
 async function writeJson(filePath, value) {
   const tempPath = `${filePath}.${randomUUID()}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
       await fs.rename(tempPath, filePath);
@@ -269,7 +286,7 @@ async function readRunnerState(queueDir) {
 
 async function withFileLock(queueDir, filename, fn, deps = {}) {
   const pathApi = deps.pathApi ?? path;
-  const openImpl = deps.openImpl ?? ((filePath, flags) => fs.open(filePath, flags));
+  const openImpl = deps.openImpl ?? ((filePath, flags, mode) => fs.open(filePath, flags, mode));
   const unlinkImpl = deps.unlinkImpl ?? ((filePath) => fs.unlink(filePath));
   const statImpl = deps.statImpl ?? ((filePath) => fs.stat(filePath));
   const delayImpl = deps.delayImpl ?? delay;
@@ -277,7 +294,7 @@ async function withFileLock(queueDir, filename, fn, deps = {}) {
 
   for (;;) {
     try {
-      const handle = await openImpl(lockPath, "wx");
+      const handle = await openImpl(lockPath, "wx", 0o600);
       try {
         return await fn();
       } finally {
@@ -453,7 +470,7 @@ async function writeRunnerLease(queueDir, runnerState, config) {
 }
 
 async function writeRunnerLock(queueDir, runnerState) {
-  const handle = await fs.open(runnerLockPath(queueDir), "wx");
+  const handle = await fs.open(runnerLockPath(queueDir), "wx", 0o600);
   try {
     await handle.writeFile(`${JSON.stringify({
       runner_id: runnerState.runner_id,
@@ -798,6 +815,15 @@ export function getQueueConfig(env = process.env, platform = process.platform) {
       : positiveNumber(configuredRunningStaleMs, defaultRunnerStaleMs),
     pollIntervalMs: positiveNumber(env.OPENCODE_ADVISOR_QUEUE_POLL_MS, 1000),
     timeoutMs,
+    opencodeDataHome: env.OPENCODE_ADVISOR_OPENCODE_DATA_HOME,
+    sessionRetentionMs: positiveNumber(env.OPENCODE_ADVISOR_SESSION_RETENTION_MS, DEFAULT_SESSION_RETENTION_MS),
+    taskRetentionMs: positiveNumber(env.OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS, DEFAULT_TASK_RETENTION_MS),
+    maintenanceIntervalMs: positiveNumber(
+      env.OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS,
+      DEFAULT_MAINTENANCE_INTERVAL_MS,
+    ),
+    env,
+    platform,
   };
 }
 
@@ -824,6 +850,21 @@ export async function lockSubmissionForTest(queueDir, fn, deps = {}) {
 
 export async function readTaskFile(queueDir, taskId) {
   return readJsonIfExists(taskPath(queueDir, taskId));
+}
+
+async function saveTaskSessionId(queueDir, task, runnerId, sessionId) {
+  await withSubmissionLock(queueDir, async () => {
+    const current = await readTaskFile(queueDir, task.id);
+    if (
+      current?.status === "running"
+      && current.runner_id === runnerId
+      && current.attempt_count === task.attempt_count
+    ) {
+      current.session_id = sessionId;
+      current.updated_at = isoFrom(Date.now());
+      await writeTaskFile(queueDir, current);
+    }
+  });
 }
 
 export async function processQueueOnce({
@@ -870,7 +911,14 @@ export async function processQueueOnce({
       return null;
     }
 
-    await executeTask(queueDir, claimedTask, runTask, runnerId);
+    await executeTask(
+      queueDir,
+      claimedTask,
+      (taskToRun) => runTask(taskToRun, {
+        onSessionId: (sessionId) => saveTaskSessionId(queueDir, taskToRun, runnerId, sessionId),
+      }),
+      runnerId,
+    );
     return claimedTask.id;
   }));
 
@@ -880,6 +928,91 @@ export async function processQueueOnce({
     startedIds: claimedIds.filter(Boolean),
     pendingCount,
   };
+}
+
+function isMaintenanceDue(state, now, config) {
+  const lastRanAt = Date.parse(state?.last_ran_at);
+  return !Number.isFinite(lastRanAt) || now - lastRanAt >= config.maintenanceIntervalMs;
+}
+
+function isTerminalTaskExpired(task, now, config) {
+  if (!TERMINAL_TASK_STATUSES.has(task.status)) {
+    return false;
+  }
+  const completedAt = Date.parse(task.completed_at || task.updated_at || task.created_at);
+  return Number.isFinite(completedAt) && now - completedAt >= config.taskRetentionMs;
+}
+
+async function cleanExpiredTasks(queueDir, now, config) {
+  const tasks = await listTaskFiles(queueDir);
+  for (const task of tasks) {
+    if (isTerminalTaskExpired(task, now, config)) {
+      await fs.unlink(taskPath(queueDir, task.id)).catch((error) => {
+        if (error?.code !== "ENOENT") {
+          throw error;
+        }
+      });
+    }
+  }
+}
+
+async function cleanExpiredSessions(config, now, runSessionCommand) {
+  if (!config.opencodeDataHome) {
+    return;
+  }
+
+  const command = resolveOpencodeCommand(config.opencodeCommand ?? "opencode", {
+    env: config.env ?? process.env,
+    platform: config.platform ?? process.platform,
+  });
+  const options = {
+    env: { ...(config.env ?? process.env), XDG_DATA_HOME: config.opencodeDataHome },
+    timeoutMs: Math.min(config.timeoutMs, 30000),
+    platform: config.platform ?? process.platform,
+  };
+  const listResult = await runSessionCommand(command, ["session", "list", "--format", "json"], options);
+  if (listResult?.code !== 0) {
+    return;
+  }
+
+  let sessions;
+  try {
+    sessions = JSON.parse(listResult.stdout || "[]");
+  } catch {
+    return;
+  }
+
+  for (const session of sessions) {
+    if (
+      typeof session?.id !== "string"
+      || !String(session.title || "").startsWith(SESSION_TITLE_PREFIX)
+      || !Number.isFinite(Number(session.updated))
+      || now - Number(session.updated) < config.sessionRetentionMs
+    ) {
+      continue;
+    }
+    await runSessionCommand(command, ["session", "delete", session.id], options);
+  }
+}
+
+export async function runQueueMaintenance({
+  queueDir,
+  config,
+  now = Date.now(),
+  runSessionCommand = runProcess,
+} = {}) {
+  await ensureQueueDir(queueDir);
+  return withFileLock(queueDir, "_maintenance.lock", async () => {
+    const state = await readJsonIfExists(maintenanceStatePath(queueDir));
+    if (!isMaintenanceDue(state, now, config)) {
+      return false;
+    }
+
+    await cleanExpiredTasks(queueDir, now, config);
+    await cleanExpiredSessions(config, now, runSessionCommand);
+    await writeJson(maintenanceStatePath(queueDir), { last_ran_at: isoFrom(now) });
+    return true;
+  });
 }
 
 export async function ensureQueueRunner({
@@ -1039,6 +1172,11 @@ export async function runQueueRunner({
   let idleSince = null;
   let consecutiveErrors = 0;
   try {
+    await runQueueMaintenance({
+      queueDir: config.queueDir,
+      config,
+    }).catch(() => {});
+
     for (;;) {
       let cycle;
       try {

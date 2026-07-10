@@ -139,6 +139,26 @@ function createTrackedFailingTaskkillSpawn() {
   };
 }
 
+function createFakeChildProcess(pid = 999999) {
+  const child = new EventEmitter();
+  child.pid = pid;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = new EventEmitter();
+  child.stdin.end = () => {};
+  child.kill = () => true;
+  return child;
+}
+
+async function waitForCondition(condition, timeoutMs = 100) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  return condition();
+}
+
 function captureChildSpawn(onChild) {
   return (...spawnArgs) => {
     const child = spawn(...spawnArgs);
@@ -497,6 +517,137 @@ test("runProcess keeps taskkill referenced until its cleanup result is known", a
   assert.equal(taskkill.getUnrefCalls(), 0);
 });
 
+test("runProcess waits for Windows tree cleanup before resolving after the direct child closes", async () => {
+  const child = createFakeChildProcess();
+  const taskkill = new EventEmitter();
+  let cleanupStarted = false;
+  let settled = false;
+  const resultPromise = runProcess("ignored", [], {
+    timeoutMs: 5,
+    platform: "win32",
+    spawnImpl: () => child,
+    terminationSpawnImpl: () => {
+      cleanupStarted = true;
+      return taskkill;
+    },
+  });
+  resultPromise.then(() => {
+    settled = true;
+  });
+
+  assert.equal(await waitForCondition(() => cleanupStarted), true);
+  child.emit("close", 0);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(settled, false);
+
+  taskkill.emit("close", 0);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(settled, false);
+  const result = await resultPromise;
+  assert.equal(result.timedOut, true);
+});
+
+test("runProcess keeps a slow Windows taskkill alive until tree cleanup completes", async () => {
+  const child = createFakeChildProcess();
+  const taskkill = new EventEmitter();
+  let taskkillKilled = false;
+  let settled = false;
+  taskkill.kill = () => {
+    taskkillKilled = true;
+    return true;
+  };
+
+  const resultPromise = runProcess("ignored", [], {
+    timeoutMs: 5,
+    platform: "win32",
+    spawnImpl: () => child,
+    terminationSpawnImpl: () => taskkill,
+  });
+  resultPromise.then(() => {
+    settled = true;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  assert.equal(taskkillKilled, false);
+  assert.equal(settled, false);
+
+  taskkill.emit("close", 0);
+  const result = await resultPromise;
+  assert.equal(result.timedOut, true);
+});
+
+test("runProcess waits for POSIX force termination before resolving after the direct child closes", async () => {
+  const child = createFakeChildProcess();
+  let settled = false;
+  const resultPromise = runProcess("ignored", [], {
+    timeoutMs: 5,
+    platform: "linux",
+    spawnImpl: () => child,
+  });
+  resultPromise.then(() => {
+    settled = true;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  child.emit("close", 0);
+  await new Promise((resolve) => setTimeout(resolve, 110));
+  assert.equal(settled, false);
+
+  const result = await resultPromise;
+  assert.equal(result.timedOut, true);
+});
+
+test("runProcess ignores late stream errors after a successful close", async () => {
+  const child = createFakeChildProcess();
+  let childKillCalls = 0;
+  let taskkillCalls = 0;
+  child.kill = () => {
+    childKillCalls += 1;
+    return true;
+  };
+
+  const resultPromise = runProcess("ignored", [], {
+    platform: "win32",
+    spawnImpl: () => child,
+    terminationSpawnImpl: () => {
+      taskkillCalls += 1;
+      return new EventEmitter();
+    },
+  });
+  child.emit("close", 0);
+
+  const result = await resultPromise;
+  child.stdout.emit("error", new Error("late stdout failure"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(result.code, 0);
+  assert.equal(childKillCalls, 0);
+  assert.equal(taskkillCalls, 0);
+});
+
+test("runProcess keeps the timeout result when stdin errors during cleanup", async () => {
+  const child = createFakeChildProcess();
+  const taskkill = new EventEmitter();
+  let cleanupStarted = false;
+  const resultPromise = runProcess("ignored", [], {
+    timeoutMs: 5,
+    platform: "win32",
+    spawnImpl: () => child,
+    terminationSpawnImpl: () => {
+      cleanupStarted = true;
+      return taskkill;
+    },
+  });
+
+  assert.equal(await waitForCondition(() => cleanupStarted), true);
+  child.stdin.emit("error", new Error("shutdown stdin failure"));
+  taskkill.emit("close", 0);
+
+  const result = await resultPromise;
+  assert.equal(result.timedOut, true);
+});
+
 test("askOpenCodeAdvisor treats capped output as a failed OpenCode run", async () => {
   const { runProcess } = createMockRunProcess({
     opencode: {
@@ -587,7 +738,7 @@ test("runProcess ends descendants when a process times out", async () => {
 
     assert.equal(result.timedOut, true);
     assert.equal(Number.isInteger(grandchildPid), true);
-    assert.equal(await waitForProcessExit(grandchildPid), true);
+    assert.equal(isProcessAlive(grandchildPid), false);
   } finally {
     if (Number.isInteger(parentPid)) forceKillProcessTree(parentPid);
     if (Number.isInteger(grandchildPid)) forceKillProcessTree(grandchildPid);

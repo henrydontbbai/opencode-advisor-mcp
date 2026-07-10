@@ -1,5 +1,8 @@
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { realpath } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   askOpenCodeAdvisor,
@@ -17,6 +20,24 @@ const WINDOWS_CHILD_REPO = `${WINDOWS_ALLOWED_ROOT}\\project`;
 const WINDOWS_REVIEW_ROOT = "C:\\workspace\\review-root";
 const WINDOWS_REVIEW_CHILD = `${WINDOWS_REVIEW_ROOT}\\project`;
 const WINDOWS_OTHER_PATH = "C:\\windows\\not-allowed.txt";
+const tempDirs = new Set();
+
+function createTempDir(prefix) {
+  const directory = mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.add(directory);
+  return directory;
+}
+
+function createDirectoryLink(target, linkPath) {
+  symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+}
+
+afterEach(() => {
+  for (const directory of tempDirs) {
+    rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
+  }
+  tempDirs.clear();
+});
 
 function createMockRunProcess({ git = {}, opencode } = {}) {
   const calls = [];
@@ -40,6 +61,7 @@ function createMockRunProcess({ git = {}, opencode } = {}) {
       timedOut: false,
     };
   };
+  runProcess.realpath = async (candidate) => path.resolve(candidate);
 
   return { calls, runProcess };
 }
@@ -80,6 +102,71 @@ test("isPathInsideAllowedRoots accepts child paths and rejects sibling prefixes"
 test("isPathInsideAllowedRoots uses platform case sensitivity", () => {
   assert.equal(isPathInsideAllowedRoots("/tmp/REPO", ["/tmp/repo"], path.posix), false);
   assert.equal(isPathInsideAllowedRoots("C:\\WORKSPACE\\REPO-ROOT\\project", [WINDOWS_ALLOWED_ROOT], path.win32), true);
+});
+
+test("askOpenCodeAdvisor rejects a cwd that escapes an allowed root through a directory link", async () => {
+  const fixtureDir = createTempDir("ocq-realpath-");
+  const allowedRoot = path.join(fixtureDir, "allowed");
+  const outsideRoot = path.join(fixtureDir, "outside");
+  const linkPath = path.join(allowedRoot, "escape");
+  mkdirSync(allowedRoot);
+  mkdirSync(outsideRoot);
+  createDirectoryLink(outsideRoot, linkPath);
+
+  const { runProcess, calls } = createMockRunProcess();
+  const result = await askOpenCodeAdvisor(
+    { cwd: linkPath, include_diff: false, include_status: false },
+    {
+      runProcess,
+      realpath,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: allowedRoot },
+      platform: process.platform,
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "invalid_cwd");
+  assert.equal(calls.length, 0);
+});
+
+test("askOpenCodeAdvisor accepts a real cwd inside an allowed root", async () => {
+  const fixtureDir = createTempDir("ocq-realpath-");
+  const allowedRoot = path.join(fixtureDir, "allowed");
+  const childDir = path.join(allowedRoot, "child");
+  mkdirSync(childDir, { recursive: true });
+
+  const { runProcess, calls } = createMockRunProcess();
+  const result = await askOpenCodeAdvisor(
+    { cwd: childDir, include_diff: false, include_status: false },
+    {
+      runProcess,
+      realpath,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: allowedRoot },
+      platform: process.platform,
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.some((call) => call.command === "opencode"), true);
+});
+
+test("askOpenCodeAdvisor rejects cwd values containing NUL bytes", async () => {
+  const { runProcess, calls } = createMockRunProcess();
+  const result = await askOpenCodeAdvisor(
+    { cwd: `${process.cwd()}\0outside`, include_diff: false, include_status: false },
+    {
+      runProcess,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: process.cwd() },
+      platform: process.platform,
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "invalid_cwd");
+  assert.equal(calls.length, 0);
 });
 
 test("truncateText reports when text is truncated", () => {
@@ -745,6 +832,7 @@ test("askOpenCodeAdvisor returns queued result when task stays pending", async (
       env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
       platform: "win32",
       taskQueue,
+      realpath: async (candidate) => candidate,
     },
   );
 

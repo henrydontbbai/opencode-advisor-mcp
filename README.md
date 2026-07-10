@@ -152,6 +152,8 @@ If planner or reviewer work does not finish inside the inline wait window, the a
 
 The server returns structured JSON with stable error codes such as `invalid_cwd`, `invalid_paths`, `git_failed`, `opencode_not_found`, `opencode_failed`, and `timeout`.
 
+`OPENCODE_ADVISOR_ALLOWED_ROOTS` is enforced against canonical filesystem paths for the requested working directory and configured roots, so directory links that escape an allowed root are rejected. This is a read-only scope guard, not a complete OS sandbox.
+
 Queue defaults are conservative:
 
 - global concurrency: `4`

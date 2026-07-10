@@ -33,14 +33,14 @@ export async function askOpenCodeAdvisor(input = {}, deps = {}) {
     return runOpenCodeAdvisorNow(input, deps);
   }
 
-  const preflight = preflightOpenCodeTask("reviewer", input, deps);
+  const preflight = await preflightOpenCodeTask("reviewer", input, deps);
   if (!preflight.ok) {
     return preflight;
   }
 
   return getTaskQueue(deps).submitAndWait({
     role: "reviewer",
-    input,
+    input: { ...input, cwd: preflight.normalized.cwd },
   });
 }
 
@@ -49,14 +49,14 @@ export async function askOpenCodePlanner(input = {}, deps = {}) {
     return runOpenCodePlannerNow(input, deps);
   }
 
-  const preflight = preflightOpenCodeTask("planner", input, deps);
+  const preflight = await preflightOpenCodeTask("planner", input, deps);
   if (!preflight.ok) {
     return preflight;
   }
 
   return getTaskQueue(deps).submitAndWait({
     role: "planner",
-    input,
+    input: { ...input, cwd: preflight.normalized.cwd },
   });
 }
 

@@ -345,6 +345,54 @@ test("askOpenCodeAdvisor treats capped output as a failed OpenCode run", async (
   assert.deepEqual(result.details, {});
 });
 
+test("askOpenCodeAdvisor classifies runtime process errors as opencode_failed", async () => {
+  const { runProcess } = createMockRunProcess({
+    opencode: Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+  });
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
+    {
+      runProcess,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+      platform: "win32",
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "opencode_failed");
+  assert.deepEqual(result.details, {});
+});
+
+test("askOpenCodeAdvisor marks incomplete Git context as truncated", async () => {
+  const { runProcess, calls } = createMockRunProcess({
+    git: {
+      "status --short": { code: 0, stdout: " M src/server.mjs\n", stderr: "", timedOut: false },
+      "diff --stat HEAD --": { code: 0, stdout: "partial stat", stderr: "", timedOut: false, outputTruncated: true },
+      "diff HEAD --": { code: 0, stdout: "complete diff", stderr: "", timedOut: false },
+      "diff --cached --stat --": { code: 0, stdout: "", stderr: "", timedOut: false },
+      "diff --cached --": { code: 0, stdout: "", stderr: "", timedOut: false },
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: WINDOWS_CHILD_REPO },
+    {
+      runProcess,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+      platform: "win32",
+      useQueue: false,
+    },
+  );
+
+  const opencodeCall = calls.find((call) => call.command === "opencode");
+  assert.equal(result.ok, true);
+  assert.equal(result.diff_truncated, true);
+  assert.match(opencodeCall.options.input, /## git diff --stat HEAD\npartial stat/);
+  assert.match(opencodeCall.options.input, /\*\*Diff truncated:\*\* yes/);
+});
+
 test("askOpenCodeAdvisor rejects cwd when allowed roots are not configured", async () => {
   const { runProcess, calls } = createMockRunProcess();
   const result = await askOpenCodeAdvisor(

@@ -138,6 +138,20 @@ async function runDirectAgentCheck({
     };
   }
 
+  if (directResult.outputTruncated) {
+    return {
+      ok: false,
+      bucket: "generic_opencode_failure",
+      step: {
+        id: agentName,
+        label,
+        ok: false,
+        detail: "output exceeded the capture limit",
+      },
+      summary: `${label} exceeded the capture limit`,
+    };
+  }
+
   if (outputHasAgentFallback(directResult.stdout, directResult.stderr)) {
     return {
       ok: false,

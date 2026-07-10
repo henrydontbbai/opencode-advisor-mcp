@@ -152,6 +152,10 @@ function appendOutput(output, chunk, maxChars = DEFAULT_MAX_PROCESS_OUTPUT_CHARS
   };
 }
 
+function isSpawnError(error) {
+  return /ENOENT|not recognized/i.test(String(error?.code || error?.message || error));
+}
+
 export function runProcess(
   command,
   args,
@@ -278,14 +282,14 @@ async function runGit(cwd, args, deps) {
   const result = await deps.runProcess("git", args, { cwd, timeoutMs: 30000, env: deps.env, platform: deps.platform });
   if (result.timedOut) throw new Error(`git ${args.join(" ")} timed out`);
   if (result.code !== 0) throw new Error(result.stderr || `git ${args.join(" ")} exited ${result.code}`);
-  return result.stdout.trim();
+  return { output: result.stdout.trim(), outputTruncated: Boolean(result.outputTruncated) };
 }
 
 async function collectGitSection(cwd, args, deps) {
   try {
-    return { ok: true, output: await runGit(cwd, args, deps) };
+    return { ok: true, ...(await runGit(cwd, args, deps)) };
   } catch {
-    return { ok: false, output: "" };
+    return { ok: false, output: "", outputTruncated: false };
   }
 }
 
@@ -294,12 +298,14 @@ async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, pat
   const pathspec = ["--", ...safePaths];
   let successfulCommands = 0;
   let status = "";
+  let outputTruncated = false;
 
   if (includeStatus) {
     const statusResult = await collectGitSection(cwd, ["status", "--short"], deps);
     if (statusResult.ok) {
       successfulCommands += 1;
       status = statusResult.output;
+      outputTruncated ||= statusResult.outputTruncated;
     }
   }
 
@@ -307,7 +313,7 @@ async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, pat
     if (includeStatus && successfulCommands === 0) {
       throw new Error("Git status collection failed");
     }
-    return { status, diff: "", diffTruncated: false };
+    return { status, diff: "", diffTruncated: outputTruncated };
   }
 
   const sections = [];
@@ -318,7 +324,10 @@ async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, pat
     ["## git diff --cached", ["diff", "--cached", ...pathspec]],
   ]) {
     const section = await collectGitSection(cwd, args, deps);
-    if (section.ok) successfulCommands += 1;
+    if (section.ok) {
+      successfulCommands += 1;
+      outputTruncated ||= section.outputTruncated;
+    }
     sections.push(`${heading}\n${section.ok ? section.output : "[unavailable]"}`);
   }
 
@@ -330,7 +339,7 @@ async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, pat
   const combinedDiff = sections.join("\n\n");
   const sanitizedDiff = shouldRedactSecrets(deps.env) ? redactSensitiveText(combinedDiff) : combinedDiff;
   const truncated = truncateText(sanitizedDiff, maxChars);
-  return { status, diff: truncated.text, diffTruncated: truncated.truncated };
+  return { status, diff: truncated.text, diffTruncated: outputTruncated || truncated.truncated };
 }
 
 function buildAdvisorPrompt({ question, goal, cwd, status, diff, diffTruncated, paths }) {
@@ -588,11 +597,11 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
       ["run", "--agent", roleDefaults.agentName, "--dir", cwd, "--format", "json"],
       { cwd, input: prompt, timeoutMs, env: runtime.env, platform: runtime.platform },
     );
-  } catch {
+  } catch (error) {
     return {
       ok: false,
-      error: "opencode_not_found",
-      message: OPENCODE_NOT_FOUND_MESSAGE,
+      error: isSpawnError(error) ? "opencode_not_found" : "opencode_failed",
+      message: isSpawnError(error) ? OPENCODE_NOT_FOUND_MESSAGE : "OpenCode process failed during execution.",
       details: {},
     };
   }

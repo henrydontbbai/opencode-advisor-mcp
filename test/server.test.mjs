@@ -159,7 +159,7 @@ function spawnReadyTreeParent() {
 
   return new Promise((resolve, reject) => {
     const readyTimeout = setTimeout(() => {
-      reject(new Error("tree fixture did not report a grandchild pid"));
+      reject(new Error("tree fixture did not report a ready grandchild pid"));
     }, 1000);
     readyTimeout.unref?.();
 
@@ -172,7 +172,7 @@ function spawnReadyTreeParent() {
       fail(new Error(`tree fixture exited before reporting readiness (${code})`));
     });
     parent.stdout.on("data", (chunk) => {
-      const pidMatch = /grandchild:(\d+)/.exec(String(chunk));
+      const pidMatch = /grandchild-ready:(\d+)/.exec(String(chunk));
       if (!pidMatch) return;
       clearTimeout(readyTimeout);
       parent.off("error", fail);

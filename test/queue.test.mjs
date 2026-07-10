@@ -12,6 +12,7 @@ import {
   processQueueOnce,
   readTaskFile,
   runQueueRunner,
+  sortByCreatedAt,
   writeTaskFile,
 } from "../src/task-queue.mjs";
 
@@ -134,6 +135,28 @@ test("getQueueConfig treats OPENCODE_ADVISOR_QUEUE_DIR as the direct queue direc
   );
 
   assert.equal(config.queueDir, path.resolve(queueDir));
+});
+
+test("getQueueConfig selects the platform-appropriate home directory", () => {
+  const config = getQueueConfig(
+    {
+      HOME: "/home/posix-user",
+      USERPROFILE: "C:\\Users\\windows-user",
+    },
+    "linux",
+  );
+
+  assert.equal(config.queueDir, "/home/posix-user/.codex/opencode-advisor/queue");
+});
+
+test("sortByCreatedAt orders malformed timestamps deterministically and coerces task ids", () => {
+  const sorted = sortByCreatedAt([
+    { id: 2, created_at: "not-a-date" },
+    { id: "valid", created_at: "2026-01-01T00:00:00.000Z" },
+    { id: 10, created_at: "not-a-date" },
+  ]);
+
+  assert.deepEqual(sorted.map((task) => String(task.id)), ["valid", "10", "2"]);
 });
 
 test("ensureQueueRunner normalizes a relative queue override before spawning the runner", async () => {

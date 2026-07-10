@@ -99,26 +99,49 @@ function redactSensitiveText(text) {
 }
 
 function stripModelReasoning(text) {
-  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const source = String(text);
+  const tagPattern = /<\/?think>/gi;
+  let visible = "";
+  let hidden = "";
+  let depth = 0;
+  let cursor = 0;
 
-  for (;;) {
-    const danglingMatch = /<think>/i.exec(cleaned);
-    if (!danglingMatch) {
-      return cleaned;
+  for (let match = tagPattern.exec(source); match; match = tagPattern.exec(source)) {
+    const segment = source.slice(cursor, match.index);
+    if (depth === 0) {
+      visible += segment;
+    } else {
+      hidden += segment;
     }
 
-    const start = danglingMatch.index;
-    const remainder = cleaned.slice(start);
-    const headingMatch = /(^|\r?\n)(#{1,6}\s)/m.exec(remainder);
-
-    if (!headingMatch) {
-      cleaned = cleaned.slice(0, start);
-      continue;
+    if (/^<think>$/i.test(match[0])) {
+      if (depth === 0) {
+        hidden = "";
+      }
+      depth += 1;
+    } else if (depth > 0) {
+      depth -= 1;
+      if (depth === 0) {
+        hidden = "";
+      }
     }
 
-    const headingOffset = headingMatch.index + headingMatch[0].length - headingMatch[2].length;
-    cleaned = `${cleaned.slice(0, start)}${remainder.slice(headingOffset)}`;
+    cursor = tagPattern.lastIndex;
   }
+
+  const tail = source.slice(cursor);
+  if (depth === 0) {
+    return `${visible}${tail}`;
+  }
+
+  hidden += tail;
+  const headingMatch = /(^|\r?\n)(#{1,6}\s)/m.exec(hidden);
+  if (!headingMatch) {
+    return visible;
+  }
+
+  const headingOffset = headingMatch.index + headingMatch[1].length;
+  return `${visible}${hidden.slice(headingOffset)}`;
 }
 
 export function extractOpenCodeText(stdout) {
@@ -387,7 +410,8 @@ function normalizeBaseRef(baseRef = "HEAD") {
 }
 
 async function runGit(cwd, args, deps) {
-  const result = await deps.runProcess("git", args, { cwd, timeoutMs: 30000, env: deps.env, platform: deps.platform });
+  const timeoutMs = positiveNumber(deps.env.OPENCODE_ADVISOR_GIT_TIMEOUT_MS, 30000);
+  const result = await deps.runProcess("git", args, { cwd, timeoutMs, env: deps.env, platform: deps.platform });
   if (result.timedOut) throw new Error(`git ${args.join(" ")} timed out`);
   if (result.code !== 0) throw new Error(result.stderr || `git ${args.join(" ")} exited ${result.code}`);
   return { output: result.stdout.trim(), outputTruncated: Boolean(result.outputTruncated) };

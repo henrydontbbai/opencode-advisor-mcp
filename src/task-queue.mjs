@@ -105,8 +105,9 @@ function getDefaultQueueDir(env = process.env, platform = process.platform) {
   }
 
   const home =
-    env.USERPROFILE ||
-    env.HOME ||
+    (platform === "win32"
+      ? env.USERPROFILE || env.HOME
+      : env.HOME || env.USERPROFILE) ||
     os.homedir();
 
   return pathApi.join(home, ".codex", "opencode-advisor", "queue");
@@ -133,11 +134,14 @@ function normalizeTaskAge(task, now) {
   };
 }
 
-function sortByCreatedAt(tasks) {
+export function sortByCreatedAt(tasks) {
   return [...tasks].sort((left, right) => {
-    const leftTime = Date.parse(left.created_at || 0);
-    const rightTime = Date.parse(right.created_at || 0);
-    return leftTime - rightTime || left.id.localeCompare(right.id);
+    const leftTime = Date.parse(left?.created_at);
+    const rightTime = Date.parse(right?.created_at);
+    const comparableLeftTime = Number.isFinite(leftTime) ? leftTime : Number.MAX_SAFE_INTEGER;
+    const comparableRightTime = Number.isFinite(rightTime) ? rightTime : Number.MAX_SAFE_INTEGER;
+    return comparableLeftTime - comparableRightTime
+      || String(left?.id ?? "").localeCompare(String(right?.id ?? ""));
   });
 }
 

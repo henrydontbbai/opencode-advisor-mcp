@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -13,6 +14,10 @@ import {
   truncateText,
 } from "./opencode-core.mjs";
 import { createTaskQueue } from "./task-queue.mjs";
+
+const packageMetadata = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
 
 function getTaskQueue(deps = {}) {
   return deps.taskQueue ?? createTaskQueue({
@@ -81,7 +86,7 @@ export function createServer(deps = {}) {
     throw new Error("OPENCODE_ADVISOR_ALLOWED_ROOTS must be configured before the MCP server starts.");
   }
 
-  const server = new McpServer({ name: "opencode-advisor", version: "0.2.0" });
+  const server = new McpServer({ name: "opencode-advisor", version: packageMetadata.version });
 
   const commonInput = {
     cwd: z.string().optional(),

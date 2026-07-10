@@ -24,5 +24,6 @@ jobs:
       - run: npm ci
       - run: npm run smoke
       - run: npm test
+      - run: npm run test:doctor
       - run: npm run print-agent
       - run: npm pack --dry-run

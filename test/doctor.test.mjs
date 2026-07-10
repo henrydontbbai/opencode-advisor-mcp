@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runDoctor, findPayloadLeaks } from "../scripts/opencode-advisor-doctor.mjs";
+import path from "node:path";
+import { getDoctorOpenCodeEnv, runDoctor, findPayloadLeaks } from "../scripts/opencode-advisor-doctor.mjs";
 import {
   createPlannerSuccessResponse,
   createSuccessResponse,
@@ -113,28 +114,20 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
   assert.equal(report.steps.every((step) => step.ok), true);
 });
 
-test("runDoctor directs explicit profile checks to the dedicated data home", async () => {
-  const commandCalls = [];
+test("getDoctorOpenCodeEnv requires and injects the dedicated data home", () => {
   const env = {
     OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
     OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
   };
 
-  const report = await runDoctor({
-    cwd: WINDOWS_CHILD_REPO,
-    env,
-    platform: "win32",
-    runCommand: async (command, args, options) => {
-      commandCalls.push({ command, args, options });
-      return createCommandResult();
-    },
-    askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload(),
-    askOpenCodePlannerImpl: async () => createCanonicalPlannerSuccessPayload(),
+  assert.deepEqual(getDoctorOpenCodeEnv(env, path.win32), {
+    ...env,
+    XDG_DATA_HOME: WINDOWS_DATA_HOME,
   });
-
-  assert.equal(report.ok, true);
-  assert.equal(commandCalls.length, 2);
-  assert.equal(commandCalls[0].options.env.XDG_DATA_HOME, undefined);
+  assert.throws(
+    () => getDoctorOpenCodeEnv({ OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, path.win32),
+    /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/i,
+  );
 });
 
 test("runDoctor classifies missing opencode command", async () => {

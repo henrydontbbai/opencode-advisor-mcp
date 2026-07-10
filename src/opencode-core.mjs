@@ -17,6 +17,7 @@ export const INVALID_CWD_MESSAGE = "cwd is outside configured allowed roots";
 export const GIT_FAILED_MESSAGE = "Git context collection failed";
 export const OPENCODE_NOT_FOUND_MESSAGE = "OpenCode command could not be started";
 export const DEFAULT_MAX_PROCESS_OUTPUT_CHARS = 1024 * 1024;
+const PROCESS_TERMINATION_FORCE_GRACE_MS = 100;
 const PEM_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g;
 const SECRET_TOKEN_PATTERN = /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/g;
 const SECRET_ASSIGNMENT_PATTERN = /^([+\- ]?(?:.*?(?:token|secret|api[_-]?key|password|pass|private[_-]?key|access[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*))(.*)$/gim;
@@ -157,6 +158,45 @@ function isSpawnError(error) {
   return /ENOENT|not recognized/i.test(String(error?.code || error?.message || error));
 }
 
+function terminateProcessTree(child, platform) {
+  if (!Number.isInteger(child.pid)) {
+    child.kill();
+    return undefined;
+  }
+
+  if (platform === "win32") {
+    try {
+      const taskkill = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      taskkill.on("error", () => {
+        child.kill();
+      });
+      taskkill.unref();
+    } catch {
+      child.kill();
+    }
+    return undefined;
+  }
+
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    child.kill("SIGTERM");
+  }
+
+  const forceTimer = setTimeout(() => {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      child.kill("SIGKILL");
+    }
+  }, PROCESS_TERMINATION_FORCE_GRACE_MS);
+  forceTimer.unref?.();
+  return forceTimer;
+}
+
 export function runProcess(
   command,
   args,
@@ -176,6 +216,7 @@ export function runProcess(
       cwd,
       env,
       shell: needsShell,
+      detached: platform !== "win32",
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -187,15 +228,16 @@ export function runProcess(
     let timedOut = false;
     let outputTruncated = false;
     let settled = false;
+    let forceTimer;
     const stopChild = () => {
-      try {
-        child.kill();
-      } catch {}
+      clearTimeout(forceTimer);
+      forceTimer = terminateProcessTree(child, platform);
     };
     const settle = (callback, value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(forceTimer);
       callback(value);
     };
     const timer = setTimeout(() => {

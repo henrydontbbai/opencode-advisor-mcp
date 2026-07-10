@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import os from "node:os";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -25,6 +25,7 @@ const WINDOWS_REVIEW_CHILD = `${WINDOWS_REVIEW_ROOT}\\project`;
 const WINDOWS_OTHER_PATH = "C:\\windows\\not-allowed.txt";
 const tempDirs = new Set();
 const PROCESS_FIXTURE = fileURLToPath(new URL("./fixtures/process-fixture.mjs", import.meta.url));
+const TREE_PARENT_FIXTURE = fileURLToPath(new URL("./fixtures/tree-parent.mjs", import.meta.url));
 
 function createTempDir(prefix) {
   const directory = mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -79,6 +80,37 @@ function createStreamErrorSpawn(streamName) {
     }, 10).unref?.();
     return child;
   };
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForProcessExit(pid, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  return !isProcessAlive(pid);
+}
+
+function forceKillProcessTree(pid) {
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+    return;
+  }
+
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {}
 }
 
 test("parseAllowedRoots splits semicolon-separated Windows paths", () => {
@@ -291,7 +323,7 @@ test("runProcess reports timeouts after terminating a long-running fixture", asy
   });
 
   assert.equal(result.timedOut, true);
-  assert.equal(result.code, null);
+  assert.equal([0, null].includes(result.code), true);
 });
 
 test("runProcess bounds default captured stdout and stderr independently", async () => {
@@ -400,6 +432,22 @@ test("askOpenCodeAdvisor marks incomplete Git context as truncated", async () =>
   assert.equal(result.diff_truncated, true);
   assert.match(opencodeCall.options.input, /## git diff --stat HEAD\npartial stat/);
   assert.match(opencodeCall.options.input, /\*\*Diff truncated:\*\* yes/);
+});
+
+test("runProcess ends descendants when a process times out", async () => {
+  let grandchildPid;
+
+  try {
+    const result = await runProcess(process.execPath, [TREE_PARENT_FIXTURE], { timeoutMs: 100 });
+    const pidMatch = /grandchild:(\d+)/.exec(result.stdout);
+    grandchildPid = Number(pidMatch?.[1]);
+
+    assert.equal(result.timedOut, true);
+    assert.equal(Number.isInteger(grandchildPid), true);
+    assert.equal(await waitForProcessExit(grandchildPid), true);
+  } finally {
+    if (Number.isInteger(grandchildPid)) forceKillProcessTree(grandchildPid);
+  }
 });
 
 test("askOpenCodeAdvisor rejects cwd when allowed roots are not configured", async () => {

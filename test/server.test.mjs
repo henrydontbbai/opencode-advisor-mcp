@@ -256,6 +256,15 @@ test("runProcess preserves CRLF-delimited JSON when CRLF spans stdout chunks", a
   assert.equal(extractOpenCodeText(result.stdout), "First Second");
 });
 
+test("runProcess preserves UTF-8 JSON text split across stdout chunks", async () => {
+  const result = await runProcess(process.execPath, [PROCESS_FIXTURE, "json-utf8-chunks"], {
+    timeoutMs: 1000,
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(extractOpenCodeText(result.stdout), "你好");
+});
+
 test("runProcess rejects exactly once when a real child stdout stream errors before close", async () => {
   await assert.rejects(
     runProcess(process.execPath, [PROCESS_FIXTURE, "delay"], {

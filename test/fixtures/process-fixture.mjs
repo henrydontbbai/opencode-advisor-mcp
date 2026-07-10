@@ -7,6 +7,15 @@ switch (mode) {
       process.stdout.write('\n{"type":"text","part":{"text":"Second"}}\r\n');
     }, 10);
     break;
+  case "json-utf8-chunks": {
+    const output = Buffer.from('{"type":"text","part":{"text":"你好"}}\n');
+    const splitIndex = output.indexOf(Buffer.from("你")) + 1;
+    process.stdout.write(output.subarray(0, splitIndex));
+    setTimeout(() => {
+      process.stdout.write(output.subarray(splitIndex));
+    }, 10);
+    break;
+  }
   case "slow":
     setTimeout(() => {
       process.stdout.write("finished");

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import {
   DEFAULT_MAX_DIFF_CHARS,
   DEFAULT_TIMEOUT_MS,
@@ -181,6 +182,8 @@ export function runProcess(
 
     let stdout = "";
     let stderr = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let timedOut = false;
     let outputTruncated = false;
     let settled = false;
@@ -201,12 +204,12 @@ export function runProcess(
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
-      const output = appendOutput(stdout, chunk, maxOutputChars);
+      const output = appendOutput(stdout, stdoutDecoder.write(chunk), maxOutputChars);
       stdout = output.text;
       outputTruncated ||= output.truncated;
     });
     child.stderr.on("data", (chunk) => {
-      const output = appendOutput(stderr, chunk, maxOutputChars);
+      const output = appendOutput(stderr, stderrDecoder.write(chunk), maxOutputChars);
       stderr = output.text;
       outputTruncated ||= output.truncated;
     });
@@ -222,6 +225,12 @@ export function runProcess(
       settle(reject, error);
     });
     child.on("close", (code) => {
+      const stdoutOutput = appendOutput(stdout, stdoutDecoder.end(), maxOutputChars);
+      stdout = stdoutOutput.text;
+      outputTruncated ||= stdoutOutput.truncated;
+      const stderrOutput = appendOutput(stderr, stderrDecoder.end(), maxOutputChars);
+      stderr = stderrOutput.text;
+      outputTruncated ||= stderrOutput.truncated;
       settle(resolve, { code, stdout, stderr, timedOut, outputTruncated });
     });
 

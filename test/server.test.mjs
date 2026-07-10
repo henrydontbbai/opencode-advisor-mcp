@@ -278,6 +278,7 @@ test("createServer requires an absolute dedicated OpenCode data home", () => {
       OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
     },
     platform: "win32",
+    path: path.win32,
   }));
 });
 

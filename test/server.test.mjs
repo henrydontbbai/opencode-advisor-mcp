@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -111,6 +112,42 @@ function forceKillProcessTree(pid) {
   try {
     process.kill(pid, "SIGKILL");
   } catch {}
+}
+
+function createFailingTaskkillSpawn() {
+  return () => {
+    const taskkill = new EventEmitter();
+    taskkill.unref = () => {};
+    queueMicrotask(() => taskkill.emit("close", 1));
+    return taskkill;
+  };
+}
+
+function captureChildSpawn(onChild) {
+  return (...spawnArgs) => {
+    const child = spawn(...spawnArgs);
+    onChild(child);
+    return child;
+  };
+}
+
+function captureTaskkillSpawn(onTaskkill) {
+  return (...spawnArgs) => {
+    const taskkill = spawn(...spawnArgs);
+    onTaskkill(taskkill);
+    return taskkill;
+  };
+}
+
+function createStdinErrorSpawn(onChild) {
+  return (...spawnArgs) => {
+    const child = spawn(...spawnArgs);
+    onChild(child);
+    setTimeout(() => {
+      child.stdin.emit("error", new Error("synthetic stdin failure"));
+    }, 10).unref?.();
+    return child;
+  };
 }
 
 test("parseAllowedRoots splits semicolon-separated Windows paths", () => {
@@ -357,6 +394,43 @@ test("runProcess rejects a prompt write after the child exits", async () => {
     }),
     /EPIPE|EOF|write after end/i,
   );
+});
+
+test("runProcess terminates a live child after stdin emits an error", async () => {
+  let childPid;
+  let taskkillClosed;
+
+  await assert.rejects(
+    runProcess(process.execPath, [PROCESS_FIXTURE, "slow"], {
+      timeoutMs: 1000,
+      spawnImpl: createStdinErrorSpawn((child) => {
+        childPid = child.pid;
+      }),
+      terminationSpawnImpl: captureTaskkillSpawn((taskkill) => {
+        taskkillClosed = new Promise((resolve) => taskkill.once("close", resolve));
+      }),
+    }),
+    /synthetic stdin failure/,
+  );
+
+  assert.equal(Number.isInteger(childPid), true);
+  if (taskkillClosed) await taskkillClosed;
+  assert.equal(await waitForProcessExit(childPid), true);
+});
+
+test("runProcess settles a timeout when taskkill exits unsuccessfully", async () => {
+  let childPid;
+  const result = await runProcess(process.execPath, [PROCESS_FIXTURE, "slow"], {
+    timeoutMs: 100,
+    platform: "win32",
+    spawnImpl: captureChildSpawn((child) => {
+      childPid = child.pid;
+    }),
+    terminationSpawnImpl: createFailingTaskkillSpawn(),
+  });
+
+  assert.equal(result.timedOut, true);
+  assert.equal(await waitForProcessExit(childPid), true);
 });
 
 test("askOpenCodeAdvisor treats capped output as a failed OpenCode run", async () => {

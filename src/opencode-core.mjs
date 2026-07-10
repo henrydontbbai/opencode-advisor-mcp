@@ -158,24 +158,31 @@ function isSpawnError(error) {
   return /ENOENT|not recognized/i.test(String(error?.code || error?.message || error));
 }
 
-function terminateProcessTree(child, platform) {
+function terminateProcessTree(child, platform, terminationSpawnImpl) {
   if (!Number.isInteger(child.pid)) {
     child.kill();
     return undefined;
   }
 
   if (platform === "win32") {
+    const terminateChild = () => {
+      try {
+        child.kill();
+      } catch {}
+    };
+
     try {
-      const taskkill = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      const taskkill = terminationSpawnImpl("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
         stdio: "ignore",
         windowsHide: true,
       });
-      taskkill.on("error", () => {
-        child.kill();
+      taskkill.once("error", terminateChild);
+      taskkill.once("close", (code) => {
+        if (code !== 0) terminateChild();
       });
       taskkill.unref();
     } catch {
-      child.kill();
+      terminateChild();
     }
     return undefined;
   }
@@ -208,6 +215,7 @@ export function runProcess(
     env = process.env,
     platform = process.platform,
     spawnImpl = spawn,
+    terminationSpawnImpl = spawn,
   } = {},
 ) {
   return new Promise((resolve, reject) => {
@@ -233,7 +241,7 @@ export function runProcess(
     const stopChild = () => {
       terminationRequested = true;
       clearTimeout(forceTimer);
-      forceTimer = terminateProcessTree(child, platform);
+      forceTimer = terminateProcessTree(child, platform, terminationSpawnImpl);
     };
     const settle = (callback, value) => {
       if (settled) return;
@@ -278,14 +286,16 @@ export function runProcess(
       settle(resolve, { code, stdout, stderr, timedOut, outputTruncated });
     });
 
-    child.stdin.on("error", (error) => {
+    const handleStdinError = (error) => {
+      stopChild();
       settle(reject, error);
-    });
+    };
+    child.stdin.on("error", handleStdinError);
     if (input) child.stdin.write(input, (error) => {
-      if (error) settle(reject, error);
+      if (error) handleStdinError(error);
     });
     child.stdin.end((error) => {
-      if (error) settle(reject, error);
+      if (error) handleStdinError(error);
     });
   });
 }

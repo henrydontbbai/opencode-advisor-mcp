@@ -340,7 +340,7 @@ test("runQueueRunner refreshes its lease while a task is still running", async (
   await runnerPromise;
 });
 
-test("a public poll keeps a long-running leased task pending", async () => {
+test("a public poll keeps an over-TTL running task with a fresh lease pending", async () => {
   const queueDir = createTempDir();
   await writeTaskFile(queueDir, createTaskFile({
     id: "ocq_publiclongrun",
@@ -353,9 +353,9 @@ test("a public poll keeps a long-running leased task pending", async () => {
   const runnerPromise = runQueueRunner({
     env: {
       OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
-      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "50",
-      OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "50",
-      OPENCODE_ADVISOR_TASK_TTL_MS: "50",
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "600000",
+      OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "600000",
+      OPENCODE_ADVISOR_TASK_TTL_MS: "600000",
       OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "1",
       OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
     },
@@ -368,7 +368,11 @@ test("a public poll keeps a long-running leased task pending", async () => {
   });
 
   await started.wait();
-  await new Promise((resolve) => setTimeout(resolve, 120));
+  const runningTask = await readTaskFile(queueDir, "ocq_publiclongrun");
+  await writeTaskFile(queueDir, {
+    ...runningTask,
+    created_at: new Date(Date.now() - 60000).toISOString(),
+  });
   const queue = createTaskQueue({
     env: {
       OPENCODE_ADVISOR_QUEUE_DIR: queueDir,

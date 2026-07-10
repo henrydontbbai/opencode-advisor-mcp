@@ -76,6 +76,8 @@ OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 
 `OPENCODE_ADVISOR_ALLOWED_ROOTS` is required. The MCP server now fails fast at startup if it is missing or empty.
 
+`OPENCODE_ADVISOR_ALLOWED_ROOTS` accepts a semicolon-separated list. If a Windows path itself contains a semicolon, wrap that one path in double quotes, for example `"C:\workspace\team;alpha";C:\workspace\other`.
+
 Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or the outer MCP tool will time out before the inner OpenCode run finishes.
 
 Queue files are stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.

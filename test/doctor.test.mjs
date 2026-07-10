@@ -129,6 +129,32 @@ test("runDoctor classifies missing opencode command", async () => {
   assert.equal(report.steps[0].ok, false);
 });
 
+test("runDoctor retries direct checks with an existing Windows fallback command", async () => {
+  const fallback = "C:\\Users\\codex\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe";
+  const calls = [];
+  const report = await runDoctor({
+    cwd: WINDOWS_CHILD_REPO,
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+      APPDATA: "C:\\Users\\codex\\AppData\\Roaming",
+    },
+    platform: "win32",
+    existsSync: (candidate) => candidate === fallback,
+    runCommand: async (command) => {
+      calls.push(command);
+      if (command === "opencode") {
+        throw new Error("spawn opencode ENOENT");
+      }
+      return createCommandResult();
+    },
+    askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload(),
+    askOpenCodePlannerImpl: async () => createCanonicalPlannerSuccessPayload(),
+  });
+
+  assert.equal(report.ok, true);
+  assert.deepEqual(calls, ["opencode", fallback, fallback]);
+});
+
 test("runDoctor classifies agent fallback from direct OpenCode output", async () => {
   let directCalls = 0;
   const report = await runDoctor({

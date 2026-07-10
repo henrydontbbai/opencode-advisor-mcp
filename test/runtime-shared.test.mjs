@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createSuccessResponse,
+  getOpencodeFallbackCommands,
   outputHasAgentFallback,
   outputHasUpstreamUnavailable,
+  resolveOpencodeCommand,
   SUCCESS_RESPONSE_KEYS,
 } from "../src/runtime-shared.mjs";
 
@@ -61,4 +63,55 @@ test("outputHasUpstreamUnavailable detects structured diagnostics", () => {
   });
 
   assert.equal(outputHasUpstreamUnavailable("", stderr), true);
+});
+
+test("resolveOpencodeCommand rejects custom commands that are not absolute existing executables", () => {
+  assert.throws(
+    () => resolveOpencodeCommand("opencode --unsafe", {
+      platform: "win32",
+      exists: () => true,
+    }),
+    /absolute/i,
+  );
+  assert.throws(
+    () => resolveOpencodeCommand("C:\\tools\\opencode.cmd", {
+      platform: "win32",
+      exists: () => true,
+    }),
+    /\.exe/i,
+  );
+  assert.throws(
+    () => resolveOpencodeCommand("C:\\tools\\opencode.exe", {
+      platform: "win32",
+      exists: () => false,
+    }),
+    /existing/i,
+  );
+  assert.equal(
+    resolveOpencodeCommand("C:\\Program Files\\OpenCode\\opencode.exe", {
+      platform: "win32",
+      exists: () => true,
+    }),
+    "C:\\Program Files\\OpenCode\\opencode.exe",
+  );
+});
+
+test("getOpencodeFallbackCommands only returns existing Windows installation candidates", () => {
+  const fallback = "C:\\Users\\codex\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe";
+  assert.deepEqual(
+    getOpencodeFallbackCommands({
+      platform: "win32",
+      env: { APPDATA: "C:\\Users\\codex\\AppData\\Roaming" },
+      exists: (candidate) => candidate === fallback,
+    }),
+    [fallback],
+  );
+  assert.deepEqual(
+    getOpencodeFallbackCommands({
+      platform: "linux",
+      env: { APPDATA: "C:\\Users\\codex\\AppData\\Roaming" },
+      exists: () => true,
+    }),
+    [],
+  );
 });

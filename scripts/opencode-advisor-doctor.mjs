@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { askOpenCodeAdvisor, askOpenCodePlanner, extractOpenCodeText } from "../src/server.mjs";
+import { runProcess } from "../src/opencode-core.mjs";
 import {
   DEFAULT_TIMEOUT_MS,
   PLANNER_SUCCESS_RESPONSE_KEYS,
@@ -25,41 +25,7 @@ const DIRECT_AGENT_CHECKS = [
   { agentName: "codex-planning-partner", label: "Direct OpenCode planning agent check" },
 ];
 
-function runCommand(command, args, { cwd, env = process.env, platform = process.platform, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  return new Promise((resolve, reject) => {
-    const needsShell = platform === "win32" && /\.(cmd|bat)$/i.test(command);
-    const child = spawn(command, args, {
-      cwd,
-      env,
-      shell: needsShell,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
-    });
-  });
-}
+const runCommand = runProcess;
 
 function unique(items) {
   return [...new Set(items)];
@@ -169,6 +135,20 @@ async function runDirectAgentCheck({
         detail: `timed out after ${timeoutMs}ms`,
       },
       summary: `${label} timed out`,
+    };
+  }
+
+  if (directResult.outputTruncated) {
+    return {
+      ok: false,
+      bucket: "generic_opencode_failure",
+      step: {
+        id: agentName,
+        label,
+        ok: false,
+        detail: "output exceeded the capture limit",
+      },
+      summary: `${label} exceeded the capture limit`,
     };
   }
 

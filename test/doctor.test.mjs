@@ -232,6 +232,21 @@ test("runDoctor classifies upstream unavailable from direct OpenCode output", as
   assert.equal(report.bucket, "upstream_unavailable");
 });
 
+test("runDoctor rejects direct-agent output that exceeded the capture limit", async () => {
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    runCommand: async () => createCommandResult({ outputTruncated: true }),
+    askOpenCodeAdvisorImpl: async () => {
+      throw new Error("should not reach health check");
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "generic_opencode_failure");
+  assert.match(report.steps[0].detail, /capture limit/i);
+});
+
 test("runDoctor classifies timeout from health check", async () => {
   const report = await runDoctor({
     cwd: "/repo",

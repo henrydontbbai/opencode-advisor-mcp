@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import {
   DEFAULT_MAX_DIFF_CHARS,
   DEFAULT_TIMEOUT_MS,
@@ -15,6 +16,7 @@ import {
 export const INVALID_CWD_MESSAGE = "cwd is outside configured allowed roots";
 export const GIT_FAILED_MESSAGE = "Git context collection failed";
 export const OPENCODE_NOT_FOUND_MESSAGE = "OpenCode command could not be started";
+export const DEFAULT_MAX_PROCESS_OUTPUT_CHARS = 1024 * 1024;
 const PEM_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g;
 const SECRET_TOKEN_PATTERN = /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/g;
 const SECRET_ASSIGNMENT_PATTERN = /^([+\- ]?(?:.*?(?:token|secret|api[_-]?key|password|pass|private[_-]?key|access[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*))(.*)$/gim;
@@ -141,10 +143,36 @@ export function extractOpenCodeText(stdout) {
   return stripModelReasoning(text).replace(/[ \t]{2,}/g, " ").trim();
 }
 
-export function runProcess(command, args, { cwd, input = "", timeoutMs = 30000, env = process.env, platform = process.platform } = {}) {
+function appendOutput(output, chunk, maxChars = DEFAULT_MAX_PROCESS_OUTPUT_CHARS) {
+  const text = String(chunk);
+  if (output.length >= maxChars) return { text: output, truncated: true };
+  const remaining = maxChars - output.length;
+  return {
+    text: `${output}${text.slice(0, remaining)}`,
+    truncated: text.length > remaining,
+  };
+}
+
+function isSpawnError(error) {
+  return /ENOENT|not recognized/i.test(String(error?.code || error?.message || error));
+}
+
+export function runProcess(
+  command,
+  args,
+  {
+    cwd,
+    input = "",
+    timeoutMs = 30000,
+    maxOutputChars = DEFAULT_MAX_PROCESS_OUTPUT_CHARS,
+    env = process.env,
+    platform = process.platform,
+    spawnImpl = spawn,
+  } = {},
+) {
   return new Promise((resolve, reject) => {
     const needsShell = platform === "win32" && /\.(cmd|bat)$/i.test(command);
-    const child = spawn(command, args, {
+    const child = spawnImpl(command, args, {
       cwd,
       env,
       shell: needsShell,
@@ -154,29 +182,67 @@ export function runProcess(command, args, { cwd, input = "", timeoutMs = 30000, 
 
     let stdout = "";
     let stderr = "";
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let timedOut = false;
+    let outputTruncated = false;
+    let settled = false;
+    const stopChild = () => {
+      try {
+        child.kill();
+      } catch {}
+    };
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      stopChild();
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const output = appendOutput(stdout, stdoutDecoder.write(chunk), maxOutputChars);
+      stdout = output.text;
+      outputTruncated ||= output.truncated;
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const output = appendOutput(stderr, stderrDecoder.write(chunk), maxOutputChars);
+      stderr = output.text;
+      outputTruncated ||= output.truncated;
+    });
+    child.stdout.on("error", (error) => {
+      stopChild();
+      settle(reject, error);
+    });
+    child.stderr.on("error", (error) => {
+      stopChild();
+      settle(reject, error);
     });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      settle(reject, error);
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
+      const stdoutOutput = appendOutput(stdout, stdoutDecoder.end(), maxOutputChars);
+      stdout = stdoutOutput.text;
+      outputTruncated ||= stdoutOutput.truncated;
+      const stderrOutput = appendOutput(stderr, stderrDecoder.end(), maxOutputChars);
+      stderr = stderrOutput.text;
+      outputTruncated ||= stderrOutput.truncated;
+      settle(resolve, { code, stdout, stderr, timedOut, outputTruncated });
     });
 
-    if (input) child.stdin.write(input);
-    child.stdin.end();
+    child.stdin.on("error", (error) => {
+      settle(reject, error);
+    });
+    if (input) child.stdin.write(input, (error) => {
+      if (error) settle(reject, error);
+    });
+    child.stdin.end((error) => {
+      if (error) settle(reject, error);
+    });
   });
 }
 
@@ -225,14 +291,14 @@ async function runGit(cwd, args, deps) {
   const result = await deps.runProcess("git", args, { cwd, timeoutMs: 30000, env: deps.env, platform: deps.platform });
   if (result.timedOut) throw new Error(`git ${args.join(" ")} timed out`);
   if (result.code !== 0) throw new Error(result.stderr || `git ${args.join(" ")} exited ${result.code}`);
-  return result.stdout.trim();
+  return { output: result.stdout.trim(), outputTruncated: Boolean(result.outputTruncated) };
 }
 
 async function collectGitSection(cwd, args, deps) {
   try {
-    return { ok: true, output: await runGit(cwd, args, deps) };
+    return { ok: true, ...(await runGit(cwd, args, deps)) };
   } catch {
-    return { ok: false, output: "" };
+    return { ok: false, output: "", outputTruncated: false };
   }
 }
 
@@ -241,12 +307,14 @@ async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, pat
   const pathspec = ["--", ...safePaths];
   let successfulCommands = 0;
   let status = "";
+  let outputTruncated = false;
 
   if (includeStatus) {
     const statusResult = await collectGitSection(cwd, ["status", "--short"], deps);
     if (statusResult.ok) {
       successfulCommands += 1;
       status = statusResult.output;
+      outputTruncated ||= statusResult.outputTruncated;
     }
   }
 
@@ -254,7 +322,7 @@ async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, pat
     if (includeStatus && successfulCommands === 0) {
       throw new Error("Git status collection failed");
     }
-    return { status, diff: "", diffTruncated: false };
+    return { status, diff: "", diffTruncated: outputTruncated };
   }
 
   const sections = [];
@@ -265,7 +333,10 @@ async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, pat
     ["## git diff --cached", ["diff", "--cached", ...pathspec]],
   ]) {
     const section = await collectGitSection(cwd, args, deps);
-    if (section.ok) successfulCommands += 1;
+    if (section.ok) {
+      successfulCommands += 1;
+      outputTruncated ||= section.outputTruncated;
+    }
     sections.push(`${heading}\n${section.ok ? section.output : "[unavailable]"}`);
   }
 
@@ -277,7 +348,7 @@ async function collectGitContext({ cwd, includeStatus, includeDiff, baseRef, pat
   const combinedDiff = sections.join("\n\n");
   const sanitizedDiff = shouldRedactSecrets(deps.env) ? redactSensitiveText(combinedDiff) : combinedDiff;
   const truncated = truncateText(sanitizedDiff, maxChars);
-  return { status, diff: truncated.text, diffTruncated: truncated.truncated };
+  return { status, diff: truncated.text, diffTruncated: outputTruncated || truncated.truncated };
 }
 
 function buildAdvisorPrompt({ question, goal, cwd, status, diff, diffTruncated, paths }) {
@@ -535,11 +606,11 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
       ["run", "--agent", roleDefaults.agentName, "--dir", cwd, "--format", "json"],
       { cwd, input: prompt, timeoutMs, env: runtime.env, platform: runtime.platform },
     );
-  } catch {
+  } catch (error) {
     return {
       ok: false,
-      error: "opencode_not_found",
-      message: OPENCODE_NOT_FOUND_MESSAGE,
+      error: isSpawnError(error) ? "opencode_not_found" : "opencode_failed",
+      message: isSpawnError(error) ? OPENCODE_NOT_FOUND_MESSAGE : "OpenCode process failed during execution.",
       details: {},
     };
   }
@@ -558,6 +629,15 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
       ok: false,
       error: "timeout",
       message: `OpenCode advisor timed out after ${timeoutMs}ms`,
+      details: {},
+    };
+  }
+
+  if (result.outputTruncated) {
+    return {
+      ok: false,
+      error: "opencode_failed",
+      message: "OpenCode output exceeded the configured capture limit.",
       details: {},
     };
   }

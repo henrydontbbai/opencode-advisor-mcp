@@ -180,7 +180,6 @@ function terminateProcessTree(child, platform, terminationSpawnImpl) {
       taskkill.once("close", (code) => {
         if (code !== 0) terminateChild();
       });
-      taskkill.unref();
     } catch {
       terminateChild();
     }

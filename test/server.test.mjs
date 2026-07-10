@@ -123,6 +123,22 @@ function createFailingTaskkillSpawn() {
   };
 }
 
+function createTrackedFailingTaskkillSpawn() {
+  let unrefCalls = 0;
+
+  return {
+    spawn: () => {
+      const taskkill = new EventEmitter();
+      taskkill.unref = () => {
+        unrefCalls += 1;
+      };
+      queueMicrotask(() => taskkill.emit("close", 1));
+      return taskkill;
+    },
+    getUnrefCalls: () => unrefCalls,
+  };
+}
+
 function captureChildSpawn(onChild) {
   return (...spawnArgs) => {
     const child = spawn(...spawnArgs);
@@ -467,6 +483,18 @@ test("runProcess settles a timeout when taskkill exits unsuccessfully", async ()
 
   assert.equal(result.timedOut, true);
   assert.equal(await waitForProcessExit(childPid), true);
+});
+
+test("runProcess keeps taskkill referenced until its cleanup result is known", async () => {
+  const taskkill = createTrackedFailingTaskkillSpawn();
+  const result = await runProcess(process.execPath, [PROCESS_FIXTURE, "slow"], {
+    timeoutMs: 20,
+    platform: "win32",
+    terminationSpawnImpl: taskkill.spawn,
+  });
+
+  assert.equal(result.timedOut, true);
+  assert.equal(taskkill.getUnrefCalls(), 0);
 });
 
 test("askOpenCodeAdvisor treats capped output as a failed OpenCode run", async () => {

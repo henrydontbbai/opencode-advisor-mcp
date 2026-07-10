@@ -1,6 +1,6 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync as createTempDirOnDisk, promises as fs, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync as createTempDirOnDisk, promises as fs, readFileSync, readdirSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
   lockSubmissionForTest,
   processQueueOnce,
   readTaskFile,
+  runQueueMaintenance,
   runQueueRunner,
   writeTaskFile,
 } from "../src/task-queue.mjs";
@@ -95,6 +96,118 @@ test("getQueueConfig uses 4/2/2 defaults", () => {
   assert.equal(config.inlineWaitMs, 60000);
   assert.equal(config.retryAfterMs, 30000);
   assert.equal(config.maxPending, 16);
+  assert.equal(config.sessionRetentionMs, 259200000);
+  assert.equal(config.taskRetentionMs, 604800000);
+});
+
+test("writeTaskFile keeps queue data private on POSIX", async () => {
+  const queueDir = createTempDir();
+  const task = createTaskFile({
+    id: "ocq_privatefile",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "private" },
+  });
+
+  await writeTaskFile(queueDir, task);
+
+  if (process.platform !== "win32") {
+    assert.equal(statSync(queueDir).mode & 0o777, 0o700);
+    assert.equal(statSync(path.join(queueDir, "ocq_privatefile.json")).mode & 0o777, 0o600);
+  }
+});
+
+test("processQueueOnce saves a session id without exposing it in the public result", async () => {
+  const queueDir = createTempDir();
+  const task = createTaskFile({
+    id: "ocq_sessiontask",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "record session" },
+  });
+  await writeTaskFile(queueDir, task);
+
+  await processQueueOnce({
+    queueDir,
+    config: getQueueConfig({}, process.platform),
+    runnerId: "runner_sessionmetadata",
+    runTask: async (claimedTask, { onSessionId }) => {
+      await onSessionId("ses_queueinternal");
+      return successfulTaskResult(claimedTask);
+    },
+  });
+
+  const saved = await readTaskFile(queueDir, task.id);
+  assert.equal(saved.session_id, "ses_queueinternal");
+  assert.equal("session_id" in saved.result, false);
+});
+
+test("runQueueMaintenance deletes expired managed sessions and terminal task files", async () => {
+  const queueDir = createTempDir();
+  const now = Date.now();
+  const expiredTask = {
+    ...createTaskFile({
+      id: "ocq_retainedtask",
+      role: "reviewer",
+      input: { cwd: "/repo", question: "cleanup" },
+      now: now - 7000,
+    }),
+    status: "completed",
+    completed_at: new Date(now - 7000).toISOString(),
+    result: successfulTaskResult({ role: "reviewer" }),
+  };
+  await writeTaskFile(queueDir, expiredTask);
+
+  const commands = [];
+  const config = {
+    ...getQueueConfig({
+      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: path.join(queueDir, "profile"),
+      OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
+      OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS: "5000",
+      OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
+    }, process.platform),
+    queueDir,
+  };
+  await runQueueMaintenance({
+    queueDir,
+    config,
+    now,
+    runSessionCommand: async (command, args, options) => {
+      commands.push({ command, args, options });
+      if (args[1] === "list") {
+        return {
+          code: 0,
+          stdout: JSON.stringify([
+            {
+              id: "ses_expired",
+              title: "opencode-advisor:ocq_retainedtask",
+              updated: now - 7000,
+            },
+            {
+              id: "ses_unmanaged",
+              title: "normal user session",
+              updated: now - 7000,
+            },
+            {
+              id: "ses_fresh",
+              title: "opencode-advisor:ocq_fresh",
+              updated: now,
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  assert.equal(await readTaskFile(queueDir, expiredTask.id), null);
+  assert.deepEqual(
+    commands.map((command) => command.args),
+    [
+      ["session", "list", "--format", "json"],
+      ["session", "delete", "ses_expired"],
+    ],
+  );
+  assert.equal(commands[0].options.env.XDG_DATA_HOME, config.opencodeDataHome);
 });
 
 test("getQueueConfig keeps stale thresholds at or above the default floor when timeout is reduced", () => {

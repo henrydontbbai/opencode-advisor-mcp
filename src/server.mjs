@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   extractOpenCodeText,
+  getOpenCodeDataHome,
   isPathInsideAllowedRoots,
   parseAllowedRoots,
   preflightOpenCodeTask,
@@ -76,10 +77,13 @@ export function getOpenCodeTask(input = {}, deps = {}) {
 }
 
 export function createServer(deps = {}) {
-  const allowedRoots = parseAllowedRoots(undefined, deps.env ?? process.env, deps.path ?? undefined);
+  const env = deps.env ?? process.env;
+  const pathApi = deps.path ?? undefined;
+  const allowedRoots = parseAllowedRoots(undefined, env, pathApi);
   if (allowedRoots.length === 0) {
     throw new Error("OPENCODE_ADVISOR_ALLOWED_ROOTS must be configured before the MCP server starts.");
   }
+  getOpenCodeDataHome(env, pathApi);
 
   const server = new McpServer({ name: "opencode-advisor", version: "0.2.0" });
 

@@ -70,6 +70,7 @@ tool_timeout_sec = 420
 
 [mcp_servers.opencode_advisor.env]
 OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root-or-semicolon-list>"
+OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-opencode-data-home>"
 OPENCODE_ADVISOR_TIMEOUT_MS = "300000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 ```
@@ -78,20 +79,26 @@ OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 
 `OPENCODE_ADVISOR_ALLOWED_ROOTS` accepts a semicolon-separated list. If a Windows path itself contains a semicolon, wrap that one path in double quotes, for example `"C:\workspace\team;alpha";C:\workspace\other`.
 
+`OPENCODE_ADVISOR_OPENCODE_DATA_HOME` is required. Set it to a new absolute directory reserved for this MCP server, such as `%USERPROFILE%\.codex\opencode-advisor\opencode-data` on Windows or `$HOME/.codex/opencode-advisor/opencode-data` elsewhere. In a shell with `XDG_DATA_HOME` set to that same directory, run `opencode auth login` before using the MCP server. Do not copy your regular OpenCode profile, `opencode.db`, WAL files, or credentials into the directory; the server intentionally keeps its session storage separate.
+
 Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or the outer MCP tool will time out before the inner OpenCode run finishes.
 
 Queue files are stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
 If the queue directory cannot be created or written, the MCP tool now returns a structured failure instead of looking like a dropped connection.
 
+Advisor task sessions stay in the dedicated profile. The server retains them for 3 days by default, retains terminal queue task files for 7 days, and performs cleanup at most once per 6 hours. It invokes only OpenCode's session list/delete commands against the dedicated profile and never performs automatic SQLite compaction.
+
 From `<repo-root>`, set allowed roots in the same shell and then run the local doctor check. This terminal command does not inherit MCP env from your Codex config file.
 
 ```powershell
 $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+$env:OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-opencode-data-home>"
 npm run doctor
 ```
 
 ```bash
 export OPENCODE_ADVISOR_ALLOWED_ROOTS="<allowed-root>"
+export OPENCODE_ADVISOR_OPENCODE_DATA_HOME="<dedicated-opencode-data-home>"
 npm run doctor
 ```
 

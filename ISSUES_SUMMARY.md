@@ -1,6 +1,6 @@
 # Issue Governance Summary
 
-This file tracks the current triage state of the public backlog for the active maintenance line.
+This file tracks the current triage state of the public backlog on `main`.
 
 Status meanings:
 
@@ -32,6 +32,9 @@ Status meanings:
 | #76 | covered | queue admission already uses a submission lock and atomic maxPending check | `src/task-queue.mjs`, `test/queue.test.mjs` |
 | #78 | covered | bug template now requests doctor output, agent status, MCP config, install mode, and redaction guidance | `.github/ISSUE_TEMPLATE/bug_report.yml`, merged in `#82` |
 | #79 | covered | package-contract tests now validate the real tarball contents and package-lock root metadata drift | `test/package-contract.test.mjs`, merged in `#82` |
+| #30 | covered | `runProcess` handles stdout/stderr failures and keeps settlement exactly once | `src/opencode-core.mjs`, regression tests merged in `#86` |
+| #61 | covered | subprocess output preserves CRLF and UTF-8 text across chunk boundaries | `src/opencode-core.mjs`, regression tests merged in `#86` |
+| #62 | covered | timeout cleanup targets the Windows process tree and POSIX inherited process group | `src/opencode-core.mjs`, process-tree regressions merged in `#87` |
 
 ## Duplicate / Consolidate
 

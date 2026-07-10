@@ -5,8 +5,10 @@ import {
   getOpencodeFallbackCommands,
   outputHasAgentFallback,
   outputHasUpstreamUnavailable,
+  positiveNumber,
   resolveOpencodeCommand,
   SUCCESS_RESPONSE_KEYS,
+  valueHasPattern,
 } from "../src/runtime-shared.mjs";
 
 test("createSuccessResponse returns the canonical public success shape", () => {
@@ -114,4 +116,21 @@ test("getOpencodeFallbackCommands only returns existing Windows installation can
     }),
     [],
   );
+});
+
+test("positiveNumber accepts only strict positive numeric configuration values", () => {
+  assert.equal(positiveNumber("12", 7), 12);
+  assert.equal(positiveNumber(" 12", 7), 7);
+  assert.equal(positiveNumber(true, 7), 7);
+  assert.equal(positiveNumber("0x10", 7), 7);
+});
+
+test("valueHasPattern safely traverses circular diagnostic values", () => {
+  const circular = { message: "needle" };
+  circular.self = circular;
+  assert.equal(valueHasPattern(circular, /needle/i), true);
+
+  const noMatch = {};
+  noMatch.self = noMatch;
+  assert.equal(valueHasPattern(noMatch, /needle/i), false);
 });

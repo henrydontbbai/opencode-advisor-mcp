@@ -1,6 +1,6 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync as createTempDirOnDisk, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync as createTempDirOnDisk, promises as fs, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -338,6 +338,69 @@ test("runQueueRunner refreshes its lease while a task is still running", async (
 
   finish.open();
   await runnerPromise;
+});
+
+test("runQueueRunner completes heartbeat cleanup before resolving", async () => {
+  const queueDir = createTempDir();
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_heartbeatcleanup",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "finish heartbeat cleanup" },
+  }));
+
+  const taskStarted = createGate();
+  const finishTask = createGate();
+  const heartbeatStarted = createGate();
+  const releaseHeartbeat = createGate();
+  const open = fs.open;
+  let holdNextHeartbeat = false;
+  let heartbeatHeld = false;
+  fs.open = async (filePath, flags, ...args) => {
+    if (
+      holdNextHeartbeat &&
+      !heartbeatHeld &&
+      flags === "wx" &&
+      String(filePath).endsWith("_runner.release.lock")
+    ) {
+      heartbeatHeld = true;
+      heartbeatStarted.open();
+      await releaseHeartbeat.wait();
+    }
+    return open(filePath, flags, ...args);
+  };
+
+  let runnerPromise;
+  try {
+    runnerPromise = runQueueRunner({
+      env: {
+        OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+        OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "30",
+        OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "1",
+        OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+      },
+      platform: process.platform,
+      runTask: async (task) => {
+        taskStarted.open();
+        await finishTask.wait();
+        return successfulTaskResult(task);
+      },
+    });
+
+    await taskStarted.wait();
+    holdNextHeartbeat = true;
+    await heartbeatStarted.wait();
+    finishTask.open();
+
+    const runnerState = await Promise.race([
+      runnerPromise.then(() => "settled"),
+      new Promise((resolve) => setTimeout(() => resolve("pending"), 25)),
+    ]);
+    assert.equal(runnerState, "pending");
+  } finally {
+    releaseHeartbeat.open();
+    await runnerPromise;
+    fs.open = open;
+  }
 });
 
 test("a public poll keeps an over-TTL running task with a fresh lease pending", async () => {

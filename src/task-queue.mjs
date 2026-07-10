@@ -676,21 +676,27 @@ async function executeTask(queueDir, task, runTask, runnerId) {
 
 async function runWithHeartbeat(taskPromise, refresh, intervalMs) {
   let timer;
+  let heartbeatPromise = Promise.resolve();
   const heartbeat = async () => {
     const refreshed = await refresh();
     if (!refreshed) {
       throw new Error("OpenCode queue runner lost its lease.");
     }
   };
+  const refreshHeartbeat = () => {
+    heartbeatPromise = heartbeatPromise.catch(() => {}).then(heartbeat);
+    return heartbeatPromise;
+  };
 
   try {
-    await heartbeat();
+    await refreshHeartbeat();
     timer = setInterval(() => {
-      heartbeat().catch(() => {});
+      refreshHeartbeat().catch(() => {});
     }, Math.max(1, Math.floor(intervalMs / 3)));
     return await taskPromise;
   } finally {
     clearInterval(timer);
+    await heartbeatPromise.catch(() => {});
   }
 }
 

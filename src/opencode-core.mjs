@@ -15,6 +15,7 @@ import {
 export const INVALID_CWD_MESSAGE = "cwd is outside configured allowed roots";
 export const GIT_FAILED_MESSAGE = "Git context collection failed";
 export const OPENCODE_NOT_FOUND_MESSAGE = "OpenCode command could not be started";
+export const DEFAULT_MAX_PROCESS_OUTPUT_CHARS = 1024 * 1024;
 const PEM_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g;
 const SECRET_TOKEN_PATTERN = /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/g;
 const SECRET_ASSIGNMENT_PATTERN = /^([+\- ]?(?:.*?(?:token|secret|api[_-]?key|password|pass|private[_-]?key|access[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*))(.*)$/gim;
@@ -141,10 +142,27 @@ export function extractOpenCodeText(stdout) {
   return stripModelReasoning(text).replace(/[ \t]{2,}/g, " ").trim();
 }
 
-export function runProcess(command, args, { cwd, input = "", timeoutMs = 30000, env = process.env, platform = process.platform } = {}) {
+function appendOutput(output, chunk, maxChars = DEFAULT_MAX_PROCESS_OUTPUT_CHARS) {
+  if (output.length >= maxChars) return output;
+  return `${output}${String(chunk).slice(0, maxChars - output.length)}`;
+}
+
+export function runProcess(
+  command,
+  args,
+  {
+    cwd,
+    input = "",
+    timeoutMs = 30000,
+    maxOutputChars = DEFAULT_MAX_PROCESS_OUTPUT_CHARS,
+    env = process.env,
+    platform = process.platform,
+    spawnImpl = spawn,
+  } = {},
+) {
   return new Promise((resolve, reject) => {
     const needsShell = platform === "win32" && /\.(cmd|bat)$/i.test(command);
-    const child = spawn(command, args, {
+    const child = spawnImpl(command, args, {
       cwd,
       env,
       shell: needsShell,
@@ -155,24 +173,42 @@ export function runProcess(command, args, { cwd, input = "", timeoutMs = 30000, 
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let settled = false;
+    const stopChild = () => {
+      try {
+        child.kill();
+      } catch {}
+    };
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      stopChild();
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      stdout = appendOutput(stdout, chunk, maxOutputChars);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      stderr = appendOutput(stderr, chunk, maxOutputChars);
+    });
+    child.stdout.on("error", (error) => {
+      stopChild();
+      settle(reject, error);
+    });
+    child.stderr.on("error", (error) => {
+      stopChild();
+      settle(reject, error);
     });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      settle(reject, error);
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
+      settle(resolve, { code, stdout, stderr, timedOut });
     });
 
     if (input) child.stdin.write(input);

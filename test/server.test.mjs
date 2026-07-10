@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import os from "node:os";
+import { spawn } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   askOpenCodeAdvisor,
   askOpenCodePlanner,
@@ -14,6 +16,7 @@ import {
   parseAllowedRoots,
   truncateText,
 } from "../src/server.mjs";
+import { DEFAULT_MAX_PROCESS_OUTPUT_CHARS, runProcess } from "../src/opencode-core.mjs";
 
 const WINDOWS_ALLOWED_ROOT = "C:\\workspace\\repo-root";
 const WINDOWS_CHILD_REPO = `${WINDOWS_ALLOWED_ROOT}\\project`;
@@ -21,6 +24,7 @@ const WINDOWS_REVIEW_ROOT = "C:\\workspace\\review-root";
 const WINDOWS_REVIEW_CHILD = `${WINDOWS_REVIEW_ROOT}\\project`;
 const WINDOWS_OTHER_PATH = "C:\\windows\\not-allowed.txt";
 const tempDirs = new Set();
+const PROCESS_FIXTURE = fileURLToPath(new URL("./fixtures/process-fixture.mjs", import.meta.url));
 
 function createTempDir(prefix) {
   const directory = mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -64,6 +68,17 @@ function createMockRunProcess({ git = {}, opencode } = {}) {
   runProcess.realpath = async (candidate) => path.resolve(candidate);
 
   return { calls, runProcess };
+}
+
+function createStreamErrorSpawn(streamName) {
+  return (...spawnArgs) => {
+    const child = spawn(...spawnArgs);
+    child[streamName].once("error", () => {});
+    setTimeout(() => {
+      child[streamName].destroy(new Error(`synthetic ${streamName} failure`));
+    }, 10).unref?.();
+    return child;
+  };
 }
 
 test("parseAllowedRoots splits semicolon-separated Windows paths", () => {
@@ -229,6 +244,67 @@ test("extractOpenCodeText supports top-level text and mixed fallback lines", () 
   ].join("\n");
 
   assert.equal(extractOpenCodeText(stdout), "Top level Visible done");
+});
+
+test("runProcess preserves CRLF-delimited JSON when CRLF spans stdout chunks", async () => {
+  const result = await runProcess(process.execPath, [PROCESS_FIXTURE, "json-crlf-chunks"], {
+    timeoutMs: 1000,
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(extractOpenCodeText(result.stdout), "First Second");
+});
+
+test("runProcess rejects exactly once when a real child stdout stream errors before close", async () => {
+  await assert.rejects(
+    runProcess(process.execPath, [PROCESS_FIXTURE, "delay"], {
+      timeoutMs: 1000,
+      spawnImpl: createStreamErrorSpawn("stdout"),
+    }),
+    /synthetic stdout failure/,
+  );
+});
+
+test("runProcess rejects exactly once when a real child stderr stream errors before close", async () => {
+  await assert.rejects(
+    runProcess(process.execPath, [PROCESS_FIXTURE, "delay"], {
+      timeoutMs: 1000,
+      spawnImpl: createStreamErrorSpawn("stderr"),
+    }),
+    /synthetic stderr failure/,
+  );
+});
+
+test("runProcess reports timeouts after terminating a long-running fixture", async () => {
+  const result = await runProcess(process.execPath, [PROCESS_FIXTURE, "slow"], {
+    timeoutMs: 20,
+  });
+
+  assert.equal(result.timedOut, true);
+  assert.equal(result.code, null);
+});
+
+test("runProcess bounds default captured stdout and stderr independently", async () => {
+  const outputLength = DEFAULT_MAX_PROCESS_OUTPUT_CHARS + 128;
+  const result = await runProcess(process.execPath, [PROCESS_FIXTURE, "large-output", String(outputLength)], {
+    timeoutMs: 1000,
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "x".repeat(DEFAULT_MAX_PROCESS_OUTPUT_CHARS));
+  assert.equal(result.stderr, "y".repeat(DEFAULT_MAX_PROCESS_OUTPUT_CHARS));
+});
+
+test("runProcess honors a smaller explicit output cap", async () => {
+  const result = await runProcess(process.execPath, [PROCESS_FIXTURE, "large-output", "128"], {
+    timeoutMs: 1000,
+    maxOutputChars: 32,
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "x".repeat(32));
+  assert.equal(result.stderr, "y".repeat(32));
 });
 
 test("askOpenCodeAdvisor rejects cwd when allowed roots are not configured", async () => {

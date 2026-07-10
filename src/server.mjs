@@ -14,6 +14,7 @@ import {
   truncateText,
 } from "./opencode-core.mjs";
 import { createTaskQueue } from "./task-queue.mjs";
+import { pathForPlatform } from "./runtime-shared.mjs";
 
 function getTaskQueue(deps = {}) {
   return deps.taskQueue ?? createTaskQueue({
@@ -78,7 +79,8 @@ export function getOpenCodeTask(input = {}, deps = {}) {
 
 export function createServer(deps = {}) {
   const env = deps.env ?? process.env;
-  const pathApi = deps.path ?? undefined;
+  const platform = deps.platform ?? process.platform;
+  const pathApi = deps.path ?? pathForPlatform(platform);
   const allowedRoots = parseAllowedRoots(undefined, env, pathApi);
   if (allowedRoots.length === 0) {
     throw new Error("OPENCODE_ADVISOR_ALLOWED_ROOTS must be configured before the MCP server starts.");

@@ -282,6 +282,26 @@ test("createServer requires an absolute dedicated OpenCode data home", () => {
   }));
 });
 
+test("createServer uses the injected platform path semantics", () => {
+  assert.doesNotThrow(() => createServer({
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: "/workspace/repo-root",
+      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: "/tmp/opencode-advisor-data",
+    },
+    platform: "linux",
+  }));
+  assert.throws(
+    () => createServer({
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: "/workspace/repo-root",
+        OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+      },
+      platform: "linux",
+    }),
+    /absolute/i,
+  );
+});
+
 test("isPathInsideAllowedRoots accepts child paths and rejects sibling prefixes", () => {
   const roots = parseAllowedRoots(WINDOWS_ALLOWED_ROOT, {}, path.win32);
   assert.equal(isPathInsideAllowedRoots(WINDOWS_CHILD_REPO, roots, path.win32), true);

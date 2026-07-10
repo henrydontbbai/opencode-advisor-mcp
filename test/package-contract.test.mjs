@@ -14,6 +14,9 @@ const installDoc = readFileSync(new URL("../docs/INSTALL.md", import.meta.url), 
 const usageDoc = readFileSync(new URL("../docs/USAGE.md", import.meta.url), "utf8");
 const acceptanceDoc = readFileSync(new URL("../docs/ACCEPTANCE.md", import.meta.url), "utf8");
 const releasingDoc = readFileSync(new URL("../RELEASING.md", import.meta.url), "utf8");
+const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const serverSource = readFileSync(new URL("../src/server.mjs", import.meta.url), "utf8");
+const serverTestSource = readFileSync(new URL("./server.test.mjs", import.meta.url), "utf8");
 const repoRoot = new URL("../", import.meta.url);
 const testRunnerScript = readFileSync(
   new URL("../scripts/run-test-files.mjs", import.meta.url),
@@ -50,12 +53,21 @@ test("default npm test excludes doctor-specific test coverage", () => {
   assert.match(testRunnerScript, /test\/bin\.test\.mjs/);
   assert.doesNotMatch(testRunnerScript, /doctor\.test\.mjs/);
   assert.equal(packageJson.scripts["test:doctor"], "node --test test/doctor.test.mjs");
+  assert.match(ciWorkflow, /npm run test:doctor/);
 });
 
 test("smoke script verifies both startup success with dedicated data home and startup failure without configuration", () => {
   assert.match(packageJson.scripts.smoke, /createServer\(\{ env \}\)/);
   assert.match(packageJson.scripts.smoke, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/);
   assert.match(packageJson.scripts.smoke, /createServer\(\{ env: \{\} \}\)/);
+  assert.doesNotMatch(packageJson.scripts.smoke, /_registeredTools/);
+  assert.doesNotMatch(serverTestSource, /_registeredTools/);
+});
+
+test("package.json is the single source for the advertised server version", () => {
+  assert.match(serverSource, /package\.json/);
+  assert.match(serverSource, /version:\s*packageMetadata\.version/);
+  assert.doesNotMatch(serverSource, /version:\s*["']0\.2\.0["']/);
 });
 
 test("doctor stays out of the published CLI and files contract", () => {

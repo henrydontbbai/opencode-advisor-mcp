@@ -1012,6 +1012,7 @@ test("askOpenCodeAdvisor isolates queue sessions and records their internal sess
         OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
       },
       platform: "win32",
+      realpath: async (candidate) => candidate,
       taskId: "ocq_sessionmetadata",
       onSessionId: async (sessionId) => {
         sessionIds.push(sessionId);

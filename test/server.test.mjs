@@ -303,8 +303,46 @@ test("runProcess honors a smaller explicit output cap", async () => {
   });
 
   assert.equal(result.code, 0);
+  assert.equal(result.outputTruncated, true);
   assert.equal(result.stdout, "x".repeat(32));
   assert.equal(result.stderr, "y".repeat(32));
+});
+
+test("runProcess rejects a prompt write after the child exits", async () => {
+  await assert.rejects(
+    runProcess(process.execPath, [PROCESS_FIXTURE, "exit-immediately"], {
+      input: "x".repeat(1024 * 1024),
+      timeoutMs: 1000,
+    }),
+    /EPIPE|EOF|write after end/i,
+  );
+});
+
+test("askOpenCodeAdvisor treats capped output as a failed OpenCode run", async () => {
+  const { runProcess } = createMockRunProcess({
+    opencode: {
+      code: 0,
+      stdout: JSON.stringify({ type: "text", part: { text: "partial" } }),
+      stderr: "",
+      timedOut: false,
+      outputTruncated: true,
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
+    {
+      runProcess,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+      platform: "win32",
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "opencode_failed");
+  assert.match(result.message, /output exceeded/i);
+  assert.deepEqual(result.details, {});
 });
 
 test("askOpenCodeAdvisor rejects cwd when allowed roots are not configured", async () => {

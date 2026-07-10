@@ -19,6 +19,9 @@ switch (mode) {
     process.stdout.write("x".repeat(Number(process.argv[3] || 0)));
     process.stderr.write("y".repeat(Number(process.argv[3] || 0)));
     break;
+  case "exit-immediately":
+    process.exit(0);
+    break;
   default:
     throw new Error(`Unsupported fixture mode: ${mode}`);
 }

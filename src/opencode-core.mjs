@@ -143,8 +143,13 @@ export function extractOpenCodeText(stdout) {
 }
 
 function appendOutput(output, chunk, maxChars = DEFAULT_MAX_PROCESS_OUTPUT_CHARS) {
-  if (output.length >= maxChars) return output;
-  return `${output}${String(chunk).slice(0, maxChars - output.length)}`;
+  const text = String(chunk);
+  if (output.length >= maxChars) return { text: output, truncated: true };
+  const remaining = maxChars - output.length;
+  return {
+    text: `${output}${text.slice(0, remaining)}`,
+    truncated: text.length > remaining,
+  };
 }
 
 export function runProcess(
@@ -173,6 +178,7 @@ export function runProcess(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let outputTruncated = false;
     let settled = false;
     const stopChild = () => {
       try {
@@ -191,10 +197,14 @@ export function runProcess(
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
-      stdout = appendOutput(stdout, chunk, maxOutputChars);
+      const output = appendOutput(stdout, chunk, maxOutputChars);
+      stdout = output.text;
+      outputTruncated ||= output.truncated;
     });
     child.stderr.on("data", (chunk) => {
-      stderr = appendOutput(stderr, chunk, maxOutputChars);
+      const output = appendOutput(stderr, chunk, maxOutputChars);
+      stderr = output.text;
+      outputTruncated ||= output.truncated;
     });
     child.stdout.on("error", (error) => {
       stopChild();
@@ -208,11 +218,18 @@ export function runProcess(
       settle(reject, error);
     });
     child.on("close", (code) => {
-      settle(resolve, { code, stdout, stderr, timedOut });
+      settle(resolve, { code, stdout, stderr, timedOut, outputTruncated });
     });
 
-    if (input) child.stdin.write(input);
-    child.stdin.end();
+    child.stdin.on("error", (error) => {
+      settle(reject, error);
+    });
+    if (input) child.stdin.write(input, (error) => {
+      if (error) settle(reject, error);
+    });
+    child.stdin.end((error) => {
+      if (error) settle(reject, error);
+    });
   });
 }
 
@@ -594,6 +611,15 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
       ok: false,
       error: "timeout",
       message: `OpenCode advisor timed out after ${timeoutMs}ms`,
+      details: {},
+    };
+  }
+
+  if (result.outputTruncated) {
+    return {
+      ok: false,
+      error: "opencode_failed",
+      message: "OpenCode output exceeded the configured capture limit.",
       details: {},
     };
   }

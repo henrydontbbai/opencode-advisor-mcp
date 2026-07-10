@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_MAX_DIFF_CHARS,
@@ -45,17 +45,22 @@ export function parseAllowedRoots(input, env = process.env, pathApi = path) {
   return splitAllowedRootEntries(source)
     .map((entry) => entry.trim())
     .filter(Boolean)
-    .map((entry) => pathApi.resolve(entry));
+    .map((entry) => {
+      if (entry.includes("\0")) {
+        throw new Error("allowed roots must not contain NUL bytes");
+      }
+      return pathApi.resolve(entry);
+    });
 }
 
 export function isPathInsideAllowedRoots(candidate, allowedRoots = parseAllowedRoots(), pathApi = path) {
   const resolved = pathApi.resolve(candidate);
   const caseInsensitive = pathApi.sep === "\\";
-  const comparableResolved = caseInsensitive ? resolved.toLowerCase() : resolved;
+  const comparableResolved = caseInsensitive ? resolved.normalize("NFC").toLowerCase() : resolved.normalize("NFC");
 
   return allowedRoots.some((root) => {
     const rootResolved = pathApi.resolve(root);
-    const comparableRoot = caseInsensitive ? rootResolved.toLowerCase() : rootResolved;
+    const comparableRoot = caseInsensitive ? rootResolved.normalize("NFC").toLowerCase() : rootResolved.normalize("NFC");
     const rootPrefix = comparableRoot.endsWith(pathApi.sep) ? comparableRoot : `${comparableRoot}${pathApi.sep}`;
     return comparableResolved === comparableRoot || comparableResolved.startsWith(rootPrefix);
   });
@@ -377,16 +382,42 @@ function buildRuntime(deps = {}) {
     existsSync: deps.existsSync ?? existsSync,
   };
   runtime.path = deps.path ?? pathForPlatform(runtime.platform);
+  runtime.realpath = deps.realpath
+    ?? deps.runProcess?.realpath
+    ?? deps.taskQueue?.realpath
+    ?? fs.realpath;
   return runtime;
 }
 
-export function preflightOpenCodeTask(role, input = {}, deps = {}) {
+async function canonicalizeAllowedCwd(cwd, allowedRoots, runtime) {
+  let canonicalCwd;
+  try {
+    canonicalCwd = await runtime.realpath(cwd);
+  } catch {
+    return null;
+  }
+
+  const canonicalRoots = (await Promise.all(allowedRoots.map(async (root) => {
+    try {
+      return await runtime.realpath(root);
+    } catch {
+      return null;
+    }
+  }))).filter(Boolean);
+
+  if (!isPathInsideAllowedRoots(canonicalCwd, canonicalRoots, runtime.path)) {
+    return null;
+  }
+
+  return canonicalCwd;
+}
+
+export async function preflightOpenCodeTask(role, input = {}, deps = {}) {
   const runtime = buildRuntime(deps);
   const roleDefaults = getRoleDefaults(role);
 
-  const cwd = runtime.path.resolve(input.cwd || process.cwd());
-  const allowedRoots = parseAllowedRoots(undefined, runtime.env, runtime.path);
-  if (!isPathInsideAllowedRoots(cwd, allowedRoots, runtime.path)) {
+  const requestedCwd = input.cwd || process.cwd();
+  if (String(requestedCwd).includes("\0")) {
     return {
       ok: false,
       error: "invalid_cwd",
@@ -421,12 +452,24 @@ export function preflightOpenCodeTask(role, input = {}, deps = {}) {
     };
   }
 
+  const cwd = runtime.path.resolve(requestedCwd);
+  const allowedRoots = parseAllowedRoots(undefined, runtime.env, runtime.path);
+  const canonicalCwd = await canonicalizeAllowedCwd(cwd, allowedRoots, runtime);
+  if (!canonicalCwd) {
+    return {
+      ok: false,
+      error: "invalid_cwd",
+      message: INVALID_CWD_MESSAGE,
+      details: {},
+    };
+  }
+
   return {
     ok: true,
     normalized: {
       runtime,
       roleDefaults,
-      cwd,
+      cwd: canonicalCwd,
       includeStatus,
       includeDiff,
       baseRef,
@@ -438,7 +481,7 @@ export function preflightOpenCodeTask(role, input = {}, deps = {}) {
 }
 
 export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
-  const preflight = preflightOpenCodeTask(role, input, deps);
+  const preflight = await preflightOpenCodeTask(role, input, deps);
   if (!preflight.ok) {
     return preflight;
   }

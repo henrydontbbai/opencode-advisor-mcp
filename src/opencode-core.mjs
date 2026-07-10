@@ -229,7 +229,9 @@ export function runProcess(
     let outputTruncated = false;
     let settled = false;
     let forceTimer;
+    let terminationRequested = false;
     const stopChild = () => {
+      terminationRequested = true;
       clearTimeout(forceTimer);
       forceTimer = terminateProcessTree(child, platform);
     };
@@ -237,7 +239,7 @@ export function runProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      clearTimeout(forceTimer);
+      if (!terminationRequested) clearTimeout(forceTimer);
       callback(value);
     };
     const timer = setTimeout(() => {

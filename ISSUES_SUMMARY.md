@@ -35,6 +35,13 @@ Status meanings:
 | #30 | covered | `runProcess` handles stdout/stderr failures and keeps settlement exactly once | `src/opencode-core.mjs`, regression tests merged in `#86` |
 | #61 | covered | subprocess output preserves CRLF and UTF-8 text across chunk boundaries | `src/opencode-core.mjs`, regression tests merged in `#86` |
 | #62 | covered | timeout cleanup targets the Windows process tree and POSIX inherited process group | `src/opencode-core.mjs`, process-tree regressions merged in `#87` |
+| #18 | covered | requested working directories containing NUL bytes are rejected before filesystem or process work begins | `src/opencode-core.mjs`, regression tests merged in `#85` |
+| #19 | covered | configured roots and request cwd values are canonicalized before containment checks, blocking symlink and junction escapes | `src/opencode-core.mjs`, regression tests merged in `#85` |
+| #22 | covered | runner ownership now uses runner ids, PIDs, leases, and atomic stale-owner takeover | `src/task-queue.mjs`, regression tests merged in `#84` |
+| #25 | covered | queue runner isolates bounded iteration failures and releases its owned lease before a clean restart | `src/task-queue.mjs`, regression tests merged in `#84` |
+| #35 | covered | queue tests use managed temporary directories and deterministic gates for concurrent runner behavior | `test/queue.test.mjs`, regression tests merged in `#84` |
+| #56 | covered | stale runner lock recovery now verifies ownership and lease state before takeover | `src/task-queue.mjs`, regression tests merged in `#84` |
+| #58 | covered | heartbeat ownership prevents stale or ghost runners from deleting a live runner state | `src/task-queue.mjs`, regression tests merged in `#84` |
 
 ## Duplicate / Consolidate
 
@@ -53,12 +60,21 @@ Status meanings:
 | #17 | deferred | debug mode expands diagnostics scope and should be considered separately |
 | #26 | deferred | larger security/release hardening lane, not part of current maintenance scope |
 | #41 | deferred | future feature bucket, intentionally out of the stability-first path |
+| #12 | deferred | formatter and lint adoption is a separate tooling decision; reconsider after the release-readiness lane |
+| #15 | deferred | OpenCode permission precedence needs upstream-confirmed behavior before changing agent policy |
+| #28 | deferred | diff caching changes cost and freshness behavior; revisit with production usage evidence |
+| #31 | deferred | prompt de-duplication is a later agent-template design change, not a reliability fix |
+| #33 | deferred | broader feature work remains outside the stability-first lane |
+| #39 / #77 | deferred | more precise public failure codes require a deliberate compatibility/versioning decision |
+| #70 | deferred | Codex outer timeout is not reliably observable from this server; keep current documentation guidance |
 | #71 | deferred | opening more diagnostic fields risks public response-surface expansion |
 | #72 | deferred | new queue/task-control tools would expand the MCP contract |
-| #73 | deferred | doctor-in-CI / JSON output remains out of scope for this round |
+| #73 | deferred | the CI portion is covered by the release-gate lane; JSON output remains a separate feature |
 
 ## Operating Rules
 
 - Keep `main` as the source of truth for whether an issue is still real.
 - Do not mix `zod` v4, release automation, npm publication, or new MCP tools into the shortlist above.
 - If a new issue duplicates one already listed here, prefer updating the canonical issue instead of growing parallel threads.
+- Keep `#43` open as the audit umbrella and `#45` open as the queue-lifecycle umbrella until their remaining scoped work has evidence.
+- Close only issues with a merged implementation and a focused regression or acceptance test; record the merged PR in this table.

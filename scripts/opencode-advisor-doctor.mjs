@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { askOpenCodeAdvisor, askOpenCodePlanner, extractOpenCodeText } from "../src/server.mjs";
+import {
+  askOpenCodeAdvisor,
+  askOpenCodePlanner,
+  extractOpenCodeText,
+  getOpenCodeDataHome,
+} from "../src/server.mjs";
 import { runProcess } from "../src/opencode-core.mjs";
 import {
   DEFAULT_TIMEOUT_MS,
@@ -216,13 +221,18 @@ export async function runDoctor({
 } = {}) {
   const timeoutMs = positiveNumber(env.OPENCODE_ADVISOR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
   const steps = [];
+  let directEnv = env;
+  if (runCommandImpl === runCommand) {
+    const dataHome = getOpenCodeDataHome(env);
+    directEnv = { ...env, XDG_DATA_HOME: dataHome };
+  }
   const opencodeCommand = resolveOpencodeCommand(env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", { env, platform, exists });
 
   for (const directCheck of DIRECT_AGENT_CHECKS) {
     const result = await runDirectAgentCheck({
       opencodeCommand,
       cwd,
-      env,
+      env: directEnv,
       platform,
       timeoutMs,
       runCommandImpl,

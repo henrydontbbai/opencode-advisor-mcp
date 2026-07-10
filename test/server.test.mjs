@@ -150,6 +150,37 @@ function createStdinErrorSpawn(onChild) {
   };
 }
 
+function spawnReadyTreeParent() {
+  const parent = spawn(process.execPath, [TREE_PARENT_FIXTURE], {
+    detached: process.platform !== "win32",
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+
+  return new Promise((resolve, reject) => {
+    const readyTimeout = setTimeout(() => {
+      reject(new Error("tree fixture did not report a grandchild pid"));
+    }, 1000);
+    readyTimeout.unref?.();
+
+    const fail = (error) => {
+      clearTimeout(readyTimeout);
+      reject(error);
+    };
+    parent.once("error", fail);
+    parent.once("close", (code) => {
+      fail(new Error(`tree fixture exited before reporting readiness (${code})`));
+    });
+    parent.stdout.on("data", (chunk) => {
+      const pidMatch = /grandchild:(\d+)/.exec(String(chunk));
+      if (!pidMatch) return;
+      clearTimeout(readyTimeout);
+      parent.off("error", fail);
+      resolve({ parent, grandchildPid: Number(pidMatch[1]) });
+    });
+  });
+}
+
 test("parseAllowedRoots splits semicolon-separated Windows paths", () => {
   const roots = parseAllowedRoots("C:\\workspace\\repo-root; C:\\workspace\\allowed-roots ", {}, path.win32);
   assert.equal(roots.length, 2);
@@ -509,17 +540,23 @@ test("askOpenCodeAdvisor marks incomplete Git context as truncated", async () =>
 });
 
 test("runProcess ends descendants when a process times out", async () => {
+  let parentPid;
   let grandchildPid;
 
   try {
-    const result = await runProcess(process.execPath, [TREE_PARENT_FIXTURE], { timeoutMs: 100 });
-    const pidMatch = /grandchild:(\d+)/.exec(result.stdout);
-    grandchildPid = Number(pidMatch?.[1]);
+    const readyTree = await spawnReadyTreeParent();
+    parentPid = readyTree.parent.pid;
+    grandchildPid = readyTree.grandchildPid;
+    const result = await runProcess(process.execPath, [TREE_PARENT_FIXTURE], {
+      timeoutMs: 100,
+      spawnImpl: () => readyTree.parent,
+    });
 
     assert.equal(result.timedOut, true);
     assert.equal(Number.isInteger(grandchildPid), true);
     assert.equal(await waitForProcessExit(grandchildPid), true);
   } finally {
+    if (Number.isInteger(parentPid)) forceKillProcessTree(parentPid);
     if (Number.isInteger(grandchildPid)) forceKillProcessTree(grandchildPid);
   }
 });

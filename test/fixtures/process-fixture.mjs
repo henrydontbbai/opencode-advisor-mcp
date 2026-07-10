@@ -19,7 +19,7 @@ switch (mode) {
   case "slow":
     setTimeout(() => {
       process.stdout.write("finished");
-    }, 1000);
+    }, 5000);
     break;
   case "delay":
     setTimeout(() => {}, 75);

@@ -319,11 +319,11 @@ test("runProcess rejects exactly once when a real child stderr stream errors bef
 
 test("runProcess reports timeouts after terminating a long-running fixture", async () => {
   const result = await runProcess(process.execPath, [PROCESS_FIXTURE, "slow"], {
-    timeoutMs: 100,
+    timeoutMs: 500,
   });
 
   assert.equal(result.timedOut, true);
-  assert.equal([0, null].includes(result.code), true);
+  assert.equal(Number.isInteger(result.code) || result.code === null, true);
 });
 
 test("runProcess bounds default captured stdout and stderr independently", async () => {

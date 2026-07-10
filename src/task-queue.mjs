@@ -674,17 +674,23 @@ async function executeTask(queueDir, task, runTask, runnerId) {
   }
 }
 
-async function runWithHeartbeat(taskPromise, refresh, intervalMs) {
+async function runWithHeartbeat(runTask, refresh, intervalMs) {
   let timer;
-  let heartbeatPromise = Promise.resolve();
-  const heartbeat = async () => {
-    const refreshed = await refresh();
-    if (!refreshed) {
-      throw new Error("OpenCode queue runner lost its lease.");
-    }
-  };
+  let heartbeatPromise = null;
   const refreshHeartbeat = () => {
-    heartbeatPromise = heartbeatPromise.catch(() => {}).then(heartbeat);
+    if (heartbeatPromise) {
+      return heartbeatPromise;
+    }
+
+    heartbeatPromise = (async () => {
+      const refreshed = await refresh();
+      if (!refreshed) {
+        throw new Error("OpenCode queue runner lost its lease.");
+      }
+    })();
+    heartbeatPromise.finally(() => {
+      heartbeatPromise = null;
+    }).catch(() => {});
     return heartbeatPromise;
   };
 
@@ -693,10 +699,10 @@ async function runWithHeartbeat(taskPromise, refresh, intervalMs) {
     timer = setInterval(() => {
       refreshHeartbeat().catch(() => {});
     }, Math.max(1, Math.floor(intervalMs / 3)));
-    return await taskPromise;
+    return await runTask();
   } finally {
     clearInterval(timer);
-    await heartbeatPromise.catch(() => {});
+    await heartbeatPromise?.catch(() => {});
   }
 }
 
@@ -1042,7 +1048,7 @@ export async function runQueueRunner({
         }
 
         cycle = await runWithHeartbeat(
-          processQueueOnce({
+          () => processQueueOnce({
             queueDir: config.queueDir,
             config,
             runTask,

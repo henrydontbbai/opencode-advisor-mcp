@@ -55,6 +55,20 @@ function createGate() {
   };
 }
 
+async function waitFor(promise, timeoutMs = 1000) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms.`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function successfulTaskResult(task) {
   return {
     ok: true,
@@ -340,7 +354,7 @@ test("runQueueRunner refreshes its lease while a task is still running", async (
   await runnerPromise;
 });
 
-test("runQueueRunner completes heartbeat cleanup before resolving", async () => {
+test("runQueueRunner waits for an in-flight heartbeat without queuing later refreshes", async () => {
   const queueDir = createTempDir();
   await writeTaskFile(queueDir, createTaskFile({
     id: "ocq_heartbeatcleanup",
@@ -355,12 +369,27 @@ test("runQueueRunner completes heartbeat cleanup before resolving", async () => 
   const open = fs.open;
   let holdNextHeartbeat = false;
   let heartbeatHeld = false;
+  let heartbeatReleased = false;
+  let releaseLockAcquisitionsAfterHeartbeat = 0;
+  const handlers = new Map();
+  const signals = {
+    on(signal, handler) {
+      handlers.set(signal, handler);
+    },
+    off(signal, handler) {
+      assert.equal(handlers.get(signal), handler);
+      handlers.delete(signal);
+    },
+  };
   fs.open = async (filePath, flags, ...args) => {
+    const isRunnerReleaseLock = flags === "wx" && String(filePath).endsWith("_runner.release.lock");
+    if (heartbeatReleased && isRunnerReleaseLock) {
+      releaseLockAcquisitionsAfterHeartbeat += 1;
+    }
     if (
       holdNextHeartbeat &&
       !heartbeatHeld &&
-      flags === "wx" &&
-      String(filePath).endsWith("_runner.release.lock")
+      isRunnerReleaseLock
     ) {
       heartbeatHeld = true;
       heartbeatStarted.open();
@@ -379,6 +408,7 @@ test("runQueueRunner completes heartbeat cleanup before resolving", async () => 
         OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
       },
       platform: process.platform,
+      signals,
       runTask: async (task) => {
         taskStarted.open();
         await finishTask.wait();
@@ -386,20 +416,73 @@ test("runQueueRunner completes heartbeat cleanup before resolving", async () => 
       },
     });
 
-    await taskStarted.wait();
+    await waitFor(taskStarted.wait());
     holdNextHeartbeat = true;
-    await heartbeatStarted.wait();
+    await waitFor(heartbeatStarted.wait());
+    await new Promise((resolve) => setTimeout(resolve, 60));
     finishTask.open();
+    handlers.get("SIGTERM")();
 
     const runnerState = await Promise.race([
       runnerPromise.then(() => "settled"),
       new Promise((resolve) => setTimeout(() => resolve("pending"), 25)),
     ]);
     assert.equal(runnerState, "pending");
+    heartbeatReleased = true;
+    releaseHeartbeat.open();
+    await waitFor(runnerPromise);
+    assert.equal(releaseLockAcquisitionsAfterHeartbeat, 1);
   } finally {
     releaseHeartbeat.open();
-    await runnerPromise;
     fs.open = open;
+    await waitFor(runnerPromise);
+  }
+});
+
+test("runQueueRunner does not start work when the initial heartbeat loses its lease", async () => {
+  const queueDir = createTempDir();
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_initialheartbeat",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "wait for initial heartbeat" },
+  }));
+
+  const readFile = fs.readFile;
+  let runnerLockReads = 0;
+  let taskRuns = 0;
+  fs.readFile = async (filePath, ...args) => {
+    if (String(filePath).endsWith("_runner.lock")) {
+      runnerLockReads += 1;
+      if (runnerLockReads === 3) {
+        return `${JSON.stringify({ runner_id: "runner_successor", pid: 999999 })}\n`;
+      }
+    }
+    return readFile(filePath, ...args);
+  };
+
+  try {
+    await assert.rejects(
+      runQueueRunner({
+        env: {
+          OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+          OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "1",
+          OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+        },
+        platform: process.platform,
+        runTask: async (task) => {
+          taskRuns += 1;
+          return successfulTaskResult(task);
+        },
+        sleep: async () => {
+          throw new Error("stop after lost lease");
+        },
+      }),
+      /stop after lost lease/,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(taskRuns, 0);
+  } finally {
+    fs.readFile = readFile;
   }
 });
 

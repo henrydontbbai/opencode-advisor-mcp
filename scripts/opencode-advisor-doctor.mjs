@@ -11,6 +11,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   PLANNER_SUCCESS_RESPONSE_KEYS,
   SUCCESS_RESPONSE_KEYS,
+  getOpencodeFallbackCommands,
   outputHasAgentFallback,
   outputHasUpstreamUnavailable,
   positiveNumber,
@@ -69,6 +70,10 @@ function classifySpawnError(error) {
     : "generic_opencode_failure";
 }
 
+function isSpawnError(error) {
+  return classifySpawnError(error) === "opencode_not_found";
+}
+
 function guidanceForBucket(bucket) {
   switch (bucket) {
     case "opencode_not_found":
@@ -105,7 +110,7 @@ export function formatDoctorReport(report) {
 }
 
 async function runDirectAgentCheck({
-  opencodeCommand,
+  opencodeCommands,
   agentName,
   label,
   cwd,
@@ -115,23 +120,36 @@ async function runDirectAgentCheck({
   runCommandImpl,
 }) {
   let directResult;
-  try {
-    directResult = await runCommandImpl(
-      opencodeCommand,
-      ["run", "--agent", agentName, "--format", "json", "Say OK only."],
-      { cwd, env, platform, timeoutMs },
-    );
-  } catch (error) {
+  let selectedCommand;
+  let spawnError;
+  for (const command of opencodeCommands) {
+    try {
+      directResult = await runCommandImpl(
+        command,
+        ["run", "--agent", agentName, "--format", "json", "Say OK only."],
+        { cwd, env, platform, timeoutMs },
+      );
+      selectedCommand = command;
+      break;
+    } catch (error) {
+      spawnError = error;
+      if (!isSpawnError(error) || command === opencodeCommands.at(-1)) {
+        break;
+      }
+    }
+  }
+
+  if (!directResult) {
     return {
       ok: false,
-      bucket: classifySpawnError(error),
+      bucket: classifySpawnError(spawnError),
       step: {
         id: agentName,
         label,
         ok: false,
-        detail: error.message,
+        detail: spawnError.message,
       },
-      summary: error.message,
+      summary: spawnError.message,
     };
   }
 
@@ -207,6 +225,7 @@ async function runDirectAgentCheck({
 
   return {
     ok: true,
+    command: selectedCommand,
     step: {
       id: agentName,
       label,
@@ -231,11 +250,18 @@ export async function runDoctor({
   if (runCommandImpl === runCommand) {
     directEnv = getDoctorOpenCodeEnv(env);
   }
-  const opencodeCommand = resolveOpencodeCommand(env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", { env, platform, exists });
+  const configuredCommand = env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode";
+  const opencodeCommand = resolveOpencodeCommand(configuredCommand, { env, platform, exists });
+  let opencodeCommands = [
+    opencodeCommand,
+    ...(configuredCommand === "opencode"
+      ? getOpencodeFallbackCommands({ env, platform, exists }).filter((command) => command !== opencodeCommand)
+      : []),
+  ];
 
   for (const directCheck of DIRECT_AGENT_CHECKS) {
     const result = await runDirectAgentCheck({
-      opencodeCommand,
+      opencodeCommands,
       cwd,
       env: directEnv,
       platform,
@@ -247,6 +273,7 @@ export async function runDoctor({
     if (!result.ok) {
       return buildFailureReport(result.bucket, steps, result.summary);
     }
+    opencodeCommands = [result.command];
   }
 
   const advisorHealthResult = await askOpenCodeAdvisorImpl(

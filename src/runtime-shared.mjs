@@ -69,27 +69,78 @@ export function positiveNumber(value, fallback) {
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
-export function resolveOpencodeCommand(
-  base,
-  { env = process.env, platform = process.platform, exists = existsSync } = {},
-) {
-  if (base !== "opencode") return base;
-  if (platform !== "win32") return "opencode";
-
-  const appData = env.APPDATA;
-  if (appData) {
-    const exePath = pathForPlatform(platform).join(
-      appData,
+function configuredWindowsOpencodePaths(env, platform) {
+  const pathApi = pathForPlatform(platform);
+  const candidates = [];
+  if (env.APPDATA) {
+    candidates.push(pathApi.join(
+      env.APPDATA,
       "npm",
       "node_modules",
       "opencode-ai",
       "bin",
       "opencode.exe",
-    );
-    if (exists(exePath)) return exePath;
+    ));
+  }
+  if (env.LOCALAPPDATA) {
+    candidates.push(pathApi.join(
+      env.LOCALAPPDATA,
+      "pnpm",
+      "global",
+      "5",
+      "node_modules",
+      "opencode-ai",
+      "bin",
+      "opencode.exe",
+    ));
+  }
+  if (env.ProgramFiles) {
+    candidates.push(pathApi.join(
+      env.ProgramFiles,
+      "nodejs",
+      "node_modules",
+      "opencode-ai",
+      "bin",
+      "opencode.exe",
+    ));
+  }
+  return candidates;
+}
+
+export function getOpencodeFallbackCommands(
+  { env = process.env, platform = process.platform, exists = existsSync } = {},
+) {
+  if (platform !== "win32") {
+    return [];
+  }
+  return configuredWindowsOpencodePaths(env, platform).filter((candidate) => exists(candidate));
+}
+
+export function resolveOpencodeCommand(
+  base,
+  { env = process.env, platform = process.platform, exists = existsSync } = {},
+) {
+  if (base === "opencode") {
+    return "opencode";
   }
 
-  return "opencode";
+  const pathApi = pathForPlatform(platform);
+  if (
+    typeof base !== "string"
+    || !base
+    || base.includes("\0")
+    || /[\r\n]/.test(base)
+    || !pathApi.isAbsolute(base)
+  ) {
+    throw new Error("OPENCODE_ADVISOR_OPENCODE_CMD must be an absolute executable path.");
+  }
+  if (platform === "win32" && !/\.exe$/i.test(base)) {
+    throw new Error("OPENCODE_ADVISOR_OPENCODE_CMD must point to an .exe file on Windows.");
+  }
+  if (!exists(base)) {
+    throw new Error("OPENCODE_ADVISOR_OPENCODE_CMD must point to an existing executable.");
+  }
+  return base;
 }
 
 export function textHasAgentFallback(text = "") {

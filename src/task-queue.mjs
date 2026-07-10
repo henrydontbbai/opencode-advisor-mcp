@@ -10,11 +10,23 @@ const QUEUE_PENDING_MESSAGE =
   "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.";
 const RUNNER_LOCK_FILENAME = "_runner.lock";
 const RUNNER_STATE_FILENAME = "_runner.json";
+const RUNNER_RELEASE_PREFIX = "_runner.release.";
 const RUNNER_SCRIPT_PATH = fileURLToPath(new URL("./queue-runner.mjs", import.meta.url));
 const TASK_ID_PATTERN = /^ocq_[A-Za-z0-9]+$/;
 const SUBMISSION_LOCK_STALE_MS = 10000;
 const DEFAULT_STALE_FLOOR_MS = DEFAULT_TIMEOUT_MS + 120000;
 const QUEUE_DIR_ERROR_CODES = new Set(["EACCES", "EEXIST", "ENOENT", "ENOTDIR", "EPERM", "EROFS"]);
+const QUEUE_READ_RETRY_CODE = "OPENCODE_ADVISOR_QUEUE_READ_RETRY";
+const MAX_CONSECUTIVE_RUNNER_ERRORS = 3;
+const RUNNER_TERMINATION_WAIT_MS = 5000;
+
+class QueueReadRetryError extends Error {
+  constructor(filePath, cause) {
+    super(`Queue file is temporarily unreadable: ${filePath}`);
+    this.code = QUEUE_READ_RETRY_CODE;
+    this.cause = cause;
+  }
+}
 
 function isoFrom(value) {
   return new Date(value).toISOString();
@@ -49,7 +61,7 @@ async function readJsonIfExists(filePath) {
           await new Promise((resolve) => setTimeout(resolve, 5));
           continue;
         }
-        return null;
+        throw new QueueReadRetryError(filePath);
       }
       return JSON.parse(raw);
     } catch (error) {
@@ -61,7 +73,7 @@ async function readJsonIfExists(filePath) {
         continue;
       }
       if (error instanceof SyntaxError) {
-        return null;
+        throw new QueueReadRetryError(filePath, error);
       }
       throw error;
     }
@@ -255,13 +267,13 @@ async function readRunnerState(queueDir) {
   return readJsonIfExists(runnerStatePath(queueDir));
 }
 
-async function withSubmissionLock(queueDir, fn, deps = {}) {
+async function withFileLock(queueDir, filename, fn, deps = {}) {
   const pathApi = deps.pathApi ?? path;
   const openImpl = deps.openImpl ?? ((filePath, flags) => fs.open(filePath, flags));
   const unlinkImpl = deps.unlinkImpl ?? ((filePath) => fs.unlink(filePath));
   const statImpl = deps.statImpl ?? ((filePath) => fs.stat(filePath));
   const delayImpl = deps.delayImpl ?? delay;
-  const lockPath = pathApi.join(queueDir, "_submit.lock");
+  const lockPath = pathApi.join(queueDir, filename);
 
   for (;;) {
     try {
@@ -293,6 +305,14 @@ async function withSubmissionLock(queueDir, fn, deps = {}) {
   }
 }
 
+async function withSubmissionLock(queueDir, fn, deps = {}) {
+  return withFileLock(queueDir, "_submit.lock", fn, deps);
+}
+
+async function withRunnerReleaseLock(queueDir, fn) {
+  return withFileLock(queueDir, `${RUNNER_RELEASE_PREFIX}lock`, fn);
+}
+
 async function submitTaskAtomically(queueDir, task, config) {
   await ensureQueueDir(queueDir);
   return withSubmissionLock(queueDir, async () => {
@@ -316,46 +336,234 @@ function isRunnerFresh(state, now, config) {
   }
 
   const heartbeatAt = Date.parse(state.heartbeat_at);
-  return Number.isFinite(heartbeatAt) && now - heartbeatAt <= config.runnerStaleMs;
-}
-
-async function updateRunnerState(queueDir, runnerState) {
-  await writeJson(runnerStatePath(queueDir), runnerState);
-}
-
-async function acquireRunnerLock(queueDir, config, runnerState) {
-  await ensureQueueDir(queueDir);
-  const lockPath = runnerLockPath(queueDir);
-  const now = Date.now();
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = await fs.open(lockPath, "wx");
-      await handle.writeFile(`${runnerState.runner_id}\n`);
-      await handle.close();
-      await updateRunnerState(queueDir, runnerState);
-      return true;
-    } catch (error) {
-      if (error?.code !== "EEXIST") {
-        throw error;
-      }
-
-      const existingState = await readRunnerState(queueDir);
-      if (existingState && isRunnerFresh(existingState, now, config)) {
-        return false;
-      }
-
-      await fs.unlink(lockPath).catch(() => {});
-      await fs.unlink(runnerStatePath(queueDir)).catch(() => {});
-    }
+  if (!Number.isFinite(heartbeatAt) || now - heartbeatAt > config.runnerStaleMs) {
+    return false;
   }
 
-  return false;
+  if (!state.lease_expires_at) {
+    return true;
+  }
+
+  const leaseExpiresAt = Date.parse(state.lease_expires_at);
+  return Number.isFinite(leaseExpiresAt) && leaseExpiresAt > now;
 }
 
-async function releaseRunnerLock(queueDir) {
-  await fs.unlink(runnerLockPath(queueDir)).catch(() => {});
+function sameRunner(left, right) {
+  return Boolean(left?.runner_id && right?.runner_id && left.runner_id === right.runner_id);
+}
+
+async function readRunnerLock(queueDir) {
+  return readRunnerLockFromPath(runnerLockPath(queueDir));
+}
+
+async function readRunnerLockFromPath(filePath) {
+  try {
+    return await readJsonIfExists(filePath);
+  } catch (error) {
+    if (error?.code === QUEUE_READ_RETRY_CODE) {
+      const raw = await fs.readFile(filePath, "utf8").catch((readError) => {
+        if (readError?.code === "ENOENT") {
+          return "";
+        }
+        throw readError;
+      });
+      const legacyRunnerId = raw.trim();
+      if (legacyRunnerId && !legacyRunnerId.startsWith("{")) {
+        return { runner_id: legacyRunnerId };
+      }
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function readRunnerLockStats(queueDir) {
+  try {
+    return await fs.stat(runnerLockPath(queueDir));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function isRunnerLeaseFresh(lock, state, lockStats, now, config) {
+  if (!lockStats) {
+    return false;
+  }
+  if (sameRunner(lock, state)) {
+    return isRunnerFresh(state, now, config);
+  }
+  return Boolean(lockStats && now - lockStats.mtimeMs <= config.runnerStaleMs);
+}
+
+function defaultProcessControl() {
+  return {
+    isProcessAlive(pid) {
+      if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
+        return false;
+      }
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return error?.code === "EPERM";
+      }
+    },
+    async terminateProcess(pid) {
+      if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
+        return false;
+      }
+      try {
+        process.kill(pid, "SIGTERM");
+        return true;
+      } catch (error) {
+        if (error?.code === "ESRCH") {
+          return false;
+        }
+        throw error;
+      }
+    },
+    async waitForProcessExit(pid, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (!this.isProcessAlive(pid)) {
+          return true;
+        }
+        await delay(25);
+      }
+      return !this.isProcessAlive(pid);
+    },
+  };
+}
+
+function createRunnerLease(runnerState, now, config) {
+  return {
+    ...runnerState,
+    heartbeat_at: isoFrom(now),
+    lease_expires_at: isoFrom(now + config.runnerStaleMs),
+  };
+}
+
+async function writeRunnerLease(queueDir, runnerState, config) {
+  const lease = createRunnerLease(runnerState, Date.now(), config);
+  await writeJson(runnerStatePath(queueDir), lease);
+  return lease;
+}
+
+async function writeRunnerLock(queueDir, runnerState) {
+  const handle = await fs.open(runnerLockPath(queueDir), "wx");
+  try {
+    await handle.writeFile(`${JSON.stringify({
+      runner_id: runnerState.runner_id,
+      pid: runnerState.pid,
+      started_at: runnerState.started_at,
+    })}\n`);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function removeRunnerStateIfOwned(queueDir, runnerId) {
+  const state = await readRunnerState(queueDir);
+  if (state?.runner_id !== runnerId) {
+    return false;
+  }
   await fs.unlink(runnerStatePath(queueDir)).catch(() => {});
+  return true;
+}
+
+async function moveRunnerLockIfOwned(queueDir, runnerId) {
+  const lockPath = runnerLockPath(queueDir);
+  const movedPath = `${lockPath}.${randomUUID()}.stale`;
+  await fs.rename(lockPath, movedPath);
+  const movedLock = await readRunnerLockFromPath(movedPath);
+  if (runnerId && movedLock?.runner_id !== runnerId) {
+    await fs.rename(movedPath, lockPath).catch(() => {});
+    return false;
+  }
+  await fs.unlink(movedPath).catch(() => {});
+  return true;
+}
+
+async function acquireRunnerLock(queueDir, config, runnerState, processControl = defaultProcessControl()) {
+  await ensureQueueDir(queueDir);
+  return withRunnerReleaseLock(queueDir, async () => {
+    const [lock, state, lockStats] = await Promise.all([
+      readRunnerLock(queueDir),
+      readRunnerState(queueDir),
+      readRunnerLockStats(queueDir),
+    ]);
+    const now = Date.now();
+    const ownerPid = Number(lock?.pid ?? state?.pid);
+    const ownerAlive = ownerPid === process.pid || processControl.isProcessAlive(ownerPid);
+    if (isRunnerLeaseFresh(lock, state, lockStats, now, config) && ownerAlive) {
+      return false;
+    }
+
+    if (lockStats) {
+      const owner = lock?.runner_id || state?.runner_id;
+      if (ownerAlive && ownerPid !== process.pid) {
+        await processControl.terminateProcess(ownerPid);
+        const terminationWaitMs = Math.max(
+          1000,
+          Math.min(config.runnerStaleMs, RUNNER_TERMINATION_WAIT_MS),
+        );
+        if (!await processControl.waitForProcessExit(ownerPid, terminationWaitMs)) {
+          return false;
+        }
+      }
+
+      if (!await moveRunnerLockIfOwned(queueDir, owner)) {
+        return false;
+      }
+      if (owner) {
+        await removeRunnerStateIfOwned(queueDir, owner);
+      }
+    }
+
+    try {
+      await writeRunnerLock(queueDir, runnerState);
+      await writeRunnerLease(queueDir, runnerState, config);
+      return true;
+    } catch (error) {
+      const currentLock = await readRunnerLock(queueDir);
+      if (sameRunner(currentLock, runnerState)) {
+        await fs.unlink(runnerLockPath(queueDir)).catch(() => {});
+      }
+      if (error?.code === "EEXIST") {
+        return false;
+      }
+      throw error;
+    }
+  });
+}
+
+async function refreshRunnerLease(queueDir, runnerState, config) {
+  return withRunnerReleaseLock(queueDir, async () => {
+    const lock = await readRunnerLock(queueDir);
+    if (!sameRunner(lock, runnerState)) {
+      return false;
+    }
+    await fs.utimes(runnerLockPath(queueDir), new Date(), new Date());
+    await writeRunnerLease(queueDir, runnerState, config);
+    return true;
+  });
+}
+
+async function releaseRunnerLock(queueDir, runnerId) {
+  return withRunnerReleaseLock(queueDir, async () => {
+    const lock = await readRunnerLock(queueDir);
+    if (lock?.runner_id !== runnerId) {
+      return false;
+    }
+    const released = await moveRunnerLockIfOwned(queueDir, runnerId);
+    if (released) {
+      await removeRunnerStateIfOwned(queueDir, runnerId);
+    }
+    return released;
+  });
 }
 
 async function delay(ms) {
@@ -363,12 +571,29 @@ async function delay(ms) {
 }
 
 async function recoverOrExpireTasks(queueDir, tasks, config, now) {
+  let runnerState;
+  let runnerStateUnreadable = false;
+  try {
+    runnerState = await readRunnerState(queueDir);
+  } catch (error) {
+    if (error?.code === QUEUE_READ_RETRY_CODE) {
+      runnerStateUnreadable = true;
+    } else {
+      throw error;
+    }
+  }
   for (const task of tasks) {
     const { updatedAt, createdAt } = normalizeTaskAge(task, now);
     const age = now - createdAt;
     const staleRuntime = now - updatedAt;
+    const activeRunnerOwnsTask = task.status === "running"
+      && (
+        runnerStateUnreadable
+        || (sameRunner(task, runnerState) && isRunnerFresh(runnerState, now, config))
+      );
 
-    const eligibleForExpiry = task.status === "queued" || (task.status === "running" && staleRuntime > config.runningStaleMs);
+    const eligibleForExpiry = task.status === "queued"
+      || (task.status === "running" && staleRuntime > config.runningStaleMs && !activeRunnerOwnsTask);
     if (age > config.taskTtlMs && eligibleForExpiry) {
       task.status = "expired";
       task.updated_at = isoFrom(now);
@@ -379,7 +604,7 @@ async function recoverOrExpireTasks(queueDir, tasks, config, now) {
       continue;
     }
 
-    if (task.status === "running" && staleRuntime > config.runningStaleMs) {
+    if (task.status === "running" && staleRuntime > config.runningStaleMs && !activeRunnerOwnsTask) {
       task.status = "queued";
       task.updated_at = isoFrom(now);
       delete task.runner_id;
@@ -390,42 +615,82 @@ async function recoverOrExpireTasks(queueDir, tasks, config, now) {
   }
 }
 
-async function executeTask(queueDir, task, runTask, now, runnerId) {
-  task.status = "running";
-  task.runner_id = runnerId;
-  task.started_at = task.started_at || isoFrom(now);
-  task.updated_at = isoFrom(now);
-  task.attempt_count = Number(task.attempt_count || 0) + 1;
-  await writeTaskFile(queueDir, task);
+async function claimTask(queueDir, taskId, runnerId, now) {
+  return withSubmissionLock(queueDir, async () => {
+    const task = await readTaskFile(queueDir, taskId);
+    if (!task || task.status !== "queued") {
+      return null;
+    }
+
+    task.status = "running";
+    task.runner_id = runnerId;
+    task.started_at = isoFrom(now);
+    task.updated_at = isoFrom(now);
+    task.attempt_count = Number(task.attempt_count || 0) + 1;
+    await writeTaskFile(queueDir, task);
+    return task;
+  });
+}
+
+async function executeTask(queueDir, task, runTask, runnerId) {
+  const finalize = async (result, status) => {
+    await withSubmissionLock(queueDir, async () => {
+      const currentTask = await readTaskFile(queueDir, task.id);
+      if (
+        currentTask?.status !== "running"
+        || currentTask.runner_id !== runnerId
+        || currentTask.attempt_count !== task.attempt_count
+      ) {
+        return;
+      }
+
+      const finishedAt = Date.now();
+      currentTask.result = result;
+      currentTask.status = status;
+      currentTask.updated_at = isoFrom(finishedAt);
+      currentTask.completed_at = isoFrom(finishedAt);
+      delete currentTask.runner_id;
+      await writeTaskFile(queueDir, currentTask);
+    });
+  };
 
   try {
     const result = await runTask(task);
-    const finishedAt = Date.now();
-    task.result = result;
-    task.status = result?.ok
+    const status = result?.ok
       ? "completed"
       : result?.error === "timeout"
         ? "timeout"
         : result?.details?.status === "expired"
           ? "expired"
           : "failed";
-    task.updated_at = isoFrom(finishedAt);
-    task.completed_at = isoFrom(finishedAt);
-    delete task.runner_id;
-    await writeTaskFile(queueDir, task);
+    await finalize(result, status);
   } catch (error) {
-    const finishedAt = Date.now();
-    task.result = {
+    await finalize({
       ok: false,
       error: "opencode_failed",
       message: error?.message || "OpenCode queue runner failed unexpectedly.",
       details: {},
-    };
-    task.status = "failed";
-    task.updated_at = isoFrom(finishedAt);
-    task.completed_at = isoFrom(finishedAt);
-    delete task.runner_id;
-    await writeTaskFile(queueDir, task);
+    }, "failed");
+  }
+}
+
+async function runWithHeartbeat(taskPromise, refresh, intervalMs) {
+  let timer;
+  const heartbeat = async () => {
+    const refreshed = await refresh();
+    if (!refreshed) {
+      throw new Error("OpenCode queue runner lost its lease.");
+    }
+  };
+
+  try {
+    await heartbeat();
+    timer = setInterval(() => {
+      heartbeat().catch(() => {});
+    }, Math.max(1, Math.floor(intervalMs / 3)));
+    return await taskPromise;
+  } finally {
+    clearInterval(timer);
   }
 }
 
@@ -434,17 +699,60 @@ async function getTaskResultInternal(queueDir, taskId, config) {
     return createInvalidTaskIdResponse();
   }
 
+  const pendingReadResponse = () => createPendingResponse({
+    id: taskId,
+    role: "reviewer",
+    status: "queued",
+  }, [], config);
+  let taskBeforeRecovery;
+  try {
+    taskBeforeRecovery = await readTaskFile(queueDir, taskId);
+  } catch (error) {
+    if (error?.code === QUEUE_READ_RETRY_CODE) {
+      return pendingReadResponse();
+    }
+    throw error;
+  }
+
   const now = Date.now();
-  const tasks = await listTaskFiles(queueDir);
+  let tasks;
+  try {
+    tasks = await listTaskFiles(queueDir);
+  } catch (error) {
+    if (error?.code === QUEUE_READ_RETRY_CODE) {
+      return taskBeforeRecovery
+        ? createPendingResponse(taskBeforeRecovery, [], config)
+        : pendingReadResponse();
+    }
+    throw error;
+  }
   await recoverOrExpireTasks(queueDir, tasks, config, now);
 
-  const task = await readTaskFile(queueDir, taskId);
+  let task;
+  try {
+    task = await readTaskFile(queueDir, taskId);
+  } catch (error) {
+    if (error?.code === QUEUE_READ_RETRY_CODE) {
+      return taskBeforeRecovery
+        ? createPendingResponse(taskBeforeRecovery, tasks, config)
+        : pendingReadResponse();
+    }
+    throw error;
+  }
   if (!task) {
     return createExpiredResponse(taskId);
   }
 
   if (task.status === "queued" || task.status === "running") {
-    const refreshedTasks = await listTaskFiles(queueDir);
+    let refreshedTasks;
+    try {
+      refreshedTasks = await listTaskFiles(queueDir);
+    } catch (error) {
+      if (error?.code === QUEUE_READ_RETRY_CODE) {
+        return createPendingResponse(task, [], config);
+      }
+      throw error;
+    }
     return createPendingResponse(task, refreshedTasks, config);
   }
 
@@ -512,6 +820,7 @@ export async function processQueueOnce({
   runTask,
   now = Date.now(),
   runnerId = `runner_${process.pid}`,
+  beforeClaim,
 }) {
   const tasks = await listTaskFiles(queueDir);
   await recoverOrExpireTasks(queueDir, tasks, config, now);
@@ -542,12 +851,21 @@ export async function processQueueOnce({
     toStart.push(task);
   }
 
-  await Promise.all(toStart.map((task) => executeTask(queueDir, task, runTask, now, runnerId)));
+  const claimedIds = await Promise.all(toStart.map(async (task) => {
+    await beforeClaim?.(task);
+    const claimedTask = await claimTask(queueDir, task.id, runnerId, now);
+    if (!claimedTask) {
+      return null;
+    }
+
+    await executeTask(queueDir, claimedTask, runTask, runnerId);
+    return claimedTask.id;
+  }));
 
   const latestTasks = await listTaskFiles(queueDir);
   const pendingCount = latestTasks.filter((task) => task.status === "queued" || task.status === "running").length;
   return {
-    startedIds: toStart.map((task) => task.id),
+    startedIds: claimedIds.filter(Boolean),
     pendingCount,
   };
 }
@@ -558,6 +876,7 @@ export async function ensureQueueRunner({
   config = getQueueConfig(env, platform),
   spawnProcess = spawn,
   nodeExec = process.execPath,
+  processControl = defaultProcessControl(),
 } = {}) {
   await ensureQueueDir(config.queueDir);
   let stdoutHandle = null;
@@ -565,9 +884,25 @@ export async function ensureQueueRunner({
   if (config.queueLogDir) {
     await ensureQueueDir(config.queueLogDir);
   }
-  const state = await readRunnerState(config.queueDir);
+  const [lock, stateResult, lockStats] = await Promise.all([
+    readRunnerLock(config.queueDir),
+    readRunnerState(config.queueDir).then(
+      (state) => ({ state }),
+      (error) => ({ error }),
+    ),
+    readRunnerLockStats(config.queueDir),
+  ]);
+  if (stateResult.error) {
+    if (stateResult.error?.code === QUEUE_READ_RETRY_CODE) {
+      return false;
+    }
+    throw stateResult.error;
+  }
+  const state = stateResult.state;
 
-  if (state && isRunnerFresh(state, Date.now(), config)) {
+  const ownerPid = Number(lock?.pid ?? state?.pid);
+  const ownerAlive = ownerPid === process.pid || processControl.isProcessAlive(ownerPid);
+  if (isRunnerLeaseFresh(lock, state, lockStats, Date.now(), config) && ownerAlive) {
     return false;
   }
 
@@ -667,6 +1002,7 @@ export async function runQueueRunner({
   runTask,
   sleep = delay,
   signals = process,
+  processControl = defaultProcessControl(),
 } = {}) {
   let shuttingDown = false;
   const stop = () => {
@@ -677,33 +1013,48 @@ export async function runQueueRunner({
 
   const config = getQueueConfig(env, platform);
   const runnerId = `runner_${process.pid}_${Date.now()}`;
-  const acquired = await acquireRunnerLock(config.queueDir, config, {
+  const runnerState = {
     runner_id: runnerId,
     pid: process.pid,
-    heartbeat_at: isoFrom(Date.now()),
     started_at: isoFrom(Date.now()),
-  });
+  };
+  const acquired = await acquireRunnerLock(config.queueDir, config, runnerState, processControl);
 
   if (!acquired) {
     return { started: false };
   }
 
   let idleSince = null;
+  let consecutiveErrors = 0;
   try {
     for (;;) {
-      await updateRunnerState(config.queueDir, {
-        runner_id: runnerId,
-        pid: process.pid,
-        heartbeat_at: isoFrom(Date.now()),
-      });
+      let cycle;
+      try {
+        const ownsLease = await refreshRunnerLease(config.queueDir, runnerState, config);
+        if (!ownsLease) {
+          break;
+        }
 
-      const cycle = await processQueueOnce({
-        queueDir: config.queueDir,
-        config,
-        runTask,
-        now: Date.now(),
-        runnerId,
-      });
+        cycle = await runWithHeartbeat(
+          processQueueOnce({
+            queueDir: config.queueDir,
+            config,
+            runTask,
+            now: Date.now(),
+            runnerId,
+          }),
+          () => refreshRunnerLease(config.queueDir, runnerState, config),
+          config.runnerStaleMs,
+        );
+        consecutiveErrors = 0;
+      } catch {
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= MAX_CONSECUTIVE_RUNNER_ERRORS) {
+          break;
+        }
+        await sleep(Math.min(config.pollIntervalMs, 1000));
+        continue;
+      }
 
       if (shuttingDown) {
         break;
@@ -725,6 +1076,6 @@ export async function runQueueRunner({
   } finally {
     signals?.off?.("SIGTERM", stop);
     signals?.off?.("SIGINT", stop);
-    await releaseRunnerLock(config.queueDir);
+    await releaseRunnerLock(config.queueDir, runnerId);
   }
 }

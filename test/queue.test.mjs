@@ -1,6 +1,6 @@
-import test from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync as createTempDirOnDisk, readFileSync, readdirSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -14,6 +14,64 @@ import {
   runQueueRunner,
   writeTaskFile,
 } from "../src/task-queue.mjs";
+
+const tempDirs = new Set();
+
+function createTempDir(prefix = "ocq-") {
+  const template = path.isAbsolute(prefix) ? prefix : path.join(os.tmpdir(), prefix);
+  const directory = createTempDirOnDisk(template);
+  tempDirs.add(directory);
+  return directory;
+}
+
+function mkdtempSync(prefix) {
+  return createTempDir(prefix);
+}
+
+function createBarrier(participants) {
+  let arrivals = 0;
+  let release;
+  const ready = new Promise((resolve) => {
+    release = resolve;
+  });
+
+  return async () => {
+    arrivals += 1;
+    if (arrivals === participants) {
+      release();
+    }
+    await ready;
+  };
+}
+
+function createGate() {
+  let open;
+  const promise = new Promise((resolve) => {
+    open = resolve;
+  });
+  return {
+    open,
+    wait: () => promise,
+  };
+}
+
+function successfulTaskResult(task) {
+  return {
+    ok: true,
+    base_ref: "HEAD",
+    status: "",
+    diff_truncated: false,
+    [task.role === "planner" ? "planner_text" : "advisor_text"]: "ok",
+    opencode_exit_code: 0,
+  };
+}
+
+afterEach(() => {
+  for (const directory of tempDirs) {
+    rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
+  }
+  tempDirs.clear();
+});
 
 test("getQueueConfig uses 4/2/2 defaults", () => {
   const config = getQueueConfig({}, "win32");
@@ -112,6 +170,35 @@ test("ensureQueueRunner writes runner logs when a queue log directory is configu
   assert.equal(spawnOptions.env.OPENCODE_ADVISOR_QUEUE_LOG_DIR, logDir);
 });
 
+test("ensureQueueRunner restarts a fresh lease whose owner PID is dead", async () => {
+  const queueDir = createTempDir();
+  const deadOwner = {
+    runner_id: "runner_dead",
+    pid: 4242,
+    heartbeat_at: new Date().toISOString(),
+    lease_expires_at: new Date(Date.now() + 600000).toISOString(),
+    started_at: new Date().toISOString(),
+  };
+  writeFileSync(path.join(queueDir, "_runner.lock"), `${JSON.stringify(deadOwner)}\n`, "utf8");
+  writeFileSync(path.join(queueDir, "_runner.json"), `${JSON.stringify(deadOwner)}\n`, "utf8");
+
+  let spawnCount = 0;
+  const started = await ensureQueueRunner({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      return { unref() {} };
+    },
+    processControl: {
+      isProcessAlive: () => false,
+    },
+  });
+
+  assert.equal(started, true);
+  assert.equal(spawnCount, 1);
+});
+
 test("processQueueOnce respects per-role and global limits", async () => {
   const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
   const config = getQueueConfig(
@@ -167,6 +254,427 @@ test("processQueueOnce respects per-role and global limits", async () => {
   const leftoverReviewer = await readTaskFile(queueDir, "reviewer_2");
   assert.equal(leftoverPlanner.status, "queued");
   assert.equal(leftoverReviewer.status, "queued");
+});
+
+test("processQueueOnce claims a queued task exactly once across competing runners", async () => {
+  const queueDir = createTempDir();
+  const config = getQueueConfig(
+    {
+      OPENCODE_ADVISOR_CONCURRENCY_GLOBAL: "1",
+      OPENCODE_ADVISOR_CONCURRENCY_PLANNER: "1",
+      OPENCODE_ADVISOR_CONCURRENCY_REVIEWER: "1",
+    },
+    process.platform,
+  );
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_competingclaim",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "claim once" },
+  }));
+
+  const barrier = createBarrier(2);
+  const executions = [];
+  const runTask = async (task) => {
+    executions.push(task.id);
+    return successfulTaskResult(task);
+  };
+
+  const [first, second] = await Promise.all([
+    processQueueOnce({
+      queueDir,
+      config,
+      runTask,
+      runnerId: "runner_first",
+      beforeClaim: barrier,
+    }),
+    processQueueOnce({
+      queueDir,
+      config,
+      runTask,
+      runnerId: "runner_second",
+      beforeClaim: barrier,
+    }),
+  ]);
+
+  const task = await readTaskFile(queueDir, "ocq_competingclaim");
+  assert.deepEqual(executions, ["ocq_competingclaim"]);
+  assert.equal(task.status, "completed");
+  assert.equal(task.attempt_count, 1);
+  assert.deepEqual(
+    [...first.startedIds, ...second.startedIds],
+    ["ocq_competingclaim"],
+  );
+});
+
+test("runQueueRunner refreshes its lease while a task is still running", async () => {
+  const queueDir = createTempDir();
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_longrunninglease",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "keep lease fresh" },
+  }));
+
+  const started = createGate();
+  const finish = createGate();
+  const runnerPromise = runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "50",
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "1",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    runTask: async (task) => {
+      started.open();
+      await finish.wait();
+      return successfulTaskResult(task);
+    },
+  });
+
+  await started.wait();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const state = JSON.parse(readFileSync(path.join(queueDir, "_runner.json"), "utf8"));
+  assert.ok(Date.now() - Date.parse(state.heartbeat_at) < 80);
+
+  finish.open();
+  await runnerPromise;
+});
+
+test("a public poll keeps a long-running leased task pending", async () => {
+  const queueDir = createTempDir();
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_publiclongrun",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "stay pending" },
+  }));
+
+  const started = createGate();
+  const finish = createGate();
+  const runnerPromise = runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "50",
+      OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "50",
+      OPENCODE_ADVISOR_TASK_TTL_MS: "50",
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "1",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    runTask: async (task) => {
+      started.open();
+      await finish.wait();
+      return successfulTaskResult(task);
+    },
+  });
+
+  await started.wait();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const queue = createTaskQueue({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "50",
+      OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "50",
+      OPENCODE_ADVISOR_TASK_TTL_MS: "50",
+    },
+    platform: process.platform,
+    spawnProcess: () => ({ unref() {} }),
+  });
+  const result = await queue.getTaskResult({ task_id: "ocq_publiclongrun" });
+  assert.equal(result.error, "queued");
+  assert.equal(result.details.status, "running");
+  assert.equal(result.details.phase_pending, true);
+
+  finish.open();
+  await runnerPromise;
+});
+
+test("a transient runner-state read cannot requeue an in-flight task", async () => {
+  const queueDir = createTempDir();
+  const now = Date.now();
+  const runningTask = {
+    ...createTaskFile({
+      id: "ocq_unreadablerunnerstate",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "do not duplicate" },
+    }),
+    status: "running",
+    created_at: new Date(now - 10000).toISOString(),
+    updated_at: new Date(now - 10000).toISOString(),
+    started_at: new Date(now - 10000).toISOString(),
+    runner_id: "runner_live",
+  };
+  await writeTaskFile(queueDir, runningTask);
+  writeFileSync(path.join(queueDir, "_runner.json"), "{", "utf8");
+
+  const queue = createTaskQueue({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "1",
+      OPENCODE_ADVISOR_TASK_TTL_MS: "600000",
+    },
+    platform: process.platform,
+    spawnProcess: () => ({ unref() {} }),
+  });
+  const result = await queue.getTaskResult({ task_id: "ocq_unreadablerunnerstate" });
+
+  assert.equal(result.error, "queued");
+  assert.equal(result.details.status, "running");
+  assert.equal((await readTaskFile(queueDir, "ocq_unreadablerunnerstate")).status, "running");
+});
+
+test("runQueueRunner terminates a live stale owner before taking over its lease", async () => {
+  const queueDir = createTempDir();
+  const staleAt = new Date(Date.now() - 5000).toISOString();
+  const staleOwner = {
+    runner_id: "runner_stale",
+    pid: 4242,
+    heartbeat_at: staleAt,
+    lease_expires_at: staleAt,
+    started_at: staleAt,
+  };
+  writeFileSync(path.join(queueDir, "_runner.lock"), `${JSON.stringify(staleOwner)}\n`, "utf8");
+  writeFileSync(path.join(queueDir, "_runner.json"), `${JSON.stringify(staleOwner)}\n`, "utf8");
+
+  let ownerAlive = true;
+  let terminationRequests = 0;
+  const result = await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "1",
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "1",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    runTask: async (task) => successfulTaskResult(task),
+    processControl: {
+      isProcessAlive: () => ownerAlive,
+      terminateProcess: async () => {
+        terminationRequests += 1;
+        ownerAlive = false;
+      },
+      waitForProcessExit: async () => !ownerAlive,
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.equal(terminationRequests, 1);
+});
+
+test("runQueueRunner leaves a fresh legacy owner alone during an upgrade", async () => {
+  const queueDir = createTempDir();
+  const legacyOwner = {
+    runner_id: "runner_legacy",
+    pid: 4242,
+    heartbeat_at: new Date().toISOString(),
+    started_at: new Date().toISOString(),
+  };
+  writeFileSync(path.join(queueDir, "_runner.lock"), "runner_legacy\n", "utf8");
+  writeFileSync(path.join(queueDir, "_runner.json"), `${JSON.stringify(legacyOwner)}\n`, "utf8");
+
+  let terminationRequests = 0;
+  const result = await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "600000",
+    },
+    platform: process.platform,
+    runTask: async (task) => successfulTaskResult(task),
+    processControl: {
+      isProcessAlive: () => true,
+      terminateProcess: async () => {
+        terminationRequests += 1;
+      },
+      waitForProcessExit: async () => false,
+    },
+  });
+
+  assert.equal(result.started, false);
+  assert.equal(terminationRequests, 0);
+});
+
+test("runQueueRunner recovers immediately when a fresh lease owner is dead", async () => {
+  const queueDir = createTempDir();
+  const owner = {
+    runner_id: "runner_dead",
+    pid: 4242,
+    heartbeat_at: new Date().toISOString(),
+    lease_expires_at: new Date(Date.now() + 600000).toISOString(),
+    started_at: new Date().toISOString(),
+  };
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_freshdeadowner",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "recover dead owner" },
+  }));
+  writeFileSync(path.join(queueDir, "_runner.lock"), `${JSON.stringify(owner)}\n`, "utf8");
+  writeFileSync(path.join(queueDir, "_runner.json"), `${JSON.stringify(owner)}\n`, "utf8");
+
+  const seen = [];
+  const result = await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "1",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    runTask: async (task) => {
+      seen.push(task.id);
+      return successfulTaskResult(task);
+    },
+    processControl: {
+      isProcessAlive: () => false,
+      terminateProcess: async () => {
+        throw new Error("dead owner must not be terminated");
+      },
+      waitForProcessExit: async () => true,
+    },
+  });
+
+  assert.equal(result.started, true);
+  assert.deepEqual(seen, ["ocq_freshdeadowner"]);
+  assert.equal((await readTaskFile(queueDir, "ocq_freshdeadowner")).status, "completed");
+});
+
+test("runQueueRunner only releases the lease it owns", async () => {
+  const queueDir = createTempDir();
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_successorlease",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "preserve successor" },
+  }));
+
+  const handlers = new Map();
+  const successor = {
+    runner_id: "runner_successor",
+    pid: 9876,
+    heartbeat_at: new Date().toISOString(),
+    lease_expires_at: new Date(Date.now() + 60000).toISOString(),
+    started_at: new Date().toISOString(),
+  };
+  await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "600000",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    signals: {
+      on(signal, handler) {
+        handlers.set(signal, handler);
+      },
+      off() {},
+    },
+    runTask: async (task) => {
+      writeFileSync(path.join(queueDir, "_runner.lock"), `${JSON.stringify(successor)}\n`, "utf8");
+      writeFileSync(path.join(queueDir, "_runner.json"), `${JSON.stringify(successor)}\n`, "utf8");
+      handlers.get("SIGTERM")();
+      return successfulTaskResult(task);
+    },
+  });
+
+  assert.deepEqual(
+    JSON.parse(readFileSync(path.join(queueDir, "_runner.lock"), "utf8")),
+    successor,
+  );
+  assert.deepEqual(
+    JSON.parse(readFileSync(path.join(queueDir, "_runner.json"), "utf8")),
+    successor,
+  );
+});
+
+test("a superseded runner cannot overwrite a successor task result", async () => {
+  const queueDir = createTempDir();
+  const task = createTaskFile({
+    id: "ocq_supersededresult",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "preserve successor result" },
+  });
+  await writeTaskFile(queueDir, task);
+
+  const started = createGate();
+  const finish = createGate();
+  const handlers = new Map();
+  const firstRunner = runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "600000",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    signals: {
+      on(signal, handler) {
+        handlers.set(signal, handler);
+      },
+      off() {},
+    },
+    runTask: async (currentTask) => {
+      started.open();
+      await finish.wait();
+      return successfulTaskResult(currentTask);
+    },
+  });
+
+  await started.wait();
+  const successorResult = {
+    ...successfulTaskResult(task),
+    planner_text: "successor result",
+  };
+  await writeTaskFile(queueDir, {
+    ...task,
+    status: "completed",
+    attempt_count: 2,
+    completed_at: new Date().toISOString(),
+    result: successorResult,
+  });
+  finish.open();
+  handlers.get("SIGTERM")();
+  await firstRunner;
+
+  const saved = await readTaskFile(queueDir, "ocq_supersededresult");
+  assert.equal(saved.status, "completed");
+  assert.equal(saved.attempt_count, 2);
+  assert.equal(saved.result.planner_text, "successor result");
+});
+
+test("runQueueRunner releases its lease after repeated loop errors", async () => {
+  const queueDir = createTempDir();
+  writeFileSync(path.join(queueDir, "ocq_looperror.json"), "{", "utf8");
+  let sleeps = 0;
+  const runnerResult = await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "600000",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    sleep: async () => {
+      sleeps += 1;
+    },
+    runTask: async () => successfulTaskResult({ role: "planner" }),
+  });
+
+  assert.equal(runnerResult.started, true);
+  assert.equal(sleeps, 2);
+  assert.equal(readdirSync(queueDir).includes("_runner.lock"), false);
+  assert.equal(readdirSync(queueDir).includes("_runner.json"), false);
+
+  unlinkSync(path.join(queueDir, "ocq_looperror.json"));
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_recoveredaftererror",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "recover clean runner" },
+  }));
+  const recovered = await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "1",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "1",
+    },
+    platform: process.platform,
+    runTask: async (task) => successfulTaskResult(task),
+  });
+  assert.equal(recovered.started, true);
+  assert.equal((await readTaskFile(queueDir, "ocq_recoveredaftererror")).status, "completed");
 });
 
 test("processQueueOnce requeues stale running tasks before starting new work", async () => {
@@ -386,6 +894,23 @@ test("createTaskQueue returns expired for missing tasks without respawning the r
   assert.equal(result.details.status, "expired");
   assert.equal(result.details.task_id, "ocq_missingtask");
   assert.equal(spawnCalled, false);
+});
+
+test("createTaskQueue keeps a temporarily unreadable task pending instead of expiring it", async () => {
+  const queueDir = createTempDir();
+  writeFileSync(path.join(queueDir, "ocq_transientread.json"), "{", "utf8");
+  const queue = createTaskQueue({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => ({ unref() {} }),
+  });
+
+  const result = await queue.getTaskResult({ task_id: "ocq_transientread" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "queued");
+  assert.equal(result.details.task_id, "ocq_transientread");
+  assert.equal(result.details.phase_pending, true);
+  assert.notEqual(result.details.status, "expired");
 });
 
 test("createTaskQueue returns queue_full without spawning the runner", async () => {

@@ -319,7 +319,7 @@ test("runProcess rejects exactly once when a real child stderr stream errors bef
 
 test("runProcess reports timeouts after terminating a long-running fixture", async () => {
   const result = await runProcess(process.execPath, [PROCESS_FIXTURE, "slow"], {
-    timeoutMs: 20,
+    timeoutMs: 100,
   });
 
   assert.equal(result.timedOut, true);

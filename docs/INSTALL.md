@@ -65,20 +65,26 @@ Add this MCP block to `<codex-config>`:
 [mcp_servers.opencode_advisor]
 command = "node"
 args = ["<repo-root>\\src\\server.mjs"]
+# macOS/Linux: args = ["/absolute/path/to/opencode-advisor-mcp/src/server.mjs"]
 startup_timeout_sec = 30
 tool_timeout_sec = 420
 
 [mcp_servers.opencode_advisor.env]
 OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root-or-semicolon-list>"
+OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-advisor-profile-data-dir>"
 OPENCODE_ADVISOR_TIMEOUT_MS = "300000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
+# Optional: only an absolute executable path is accepted.
+# OPENCODE_ADVISOR_OPENCODE_CMD = "C:\\Program Files\\OpenCode\\opencode.exe"
 ```
 
 `OPENCODE_ADVISOR_ALLOWED_ROOTS` is required. The MCP server now fails fast at startup if it is missing or empty.
 
 `OPENCODE_ADVISOR_ALLOWED_ROOTS` accepts a semicolon-separated list. If a Windows path itself contains a semicolon, wrap that one path in double quotes, for example `"C:\workspace\team;alpha";C:\workspace\other`.
 
-Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or the outer MCP tool will time out before the inner OpenCode run finishes.
+`startup_timeout_sec` only controls MCP connection establishment. Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or the outer MCP tool will time out before the inner OpenCode run finishes.
+
+`OPENCODE_ADVISOR_OPENCODE_DATA_HOME` is a required, dedicated advisor profile. Before serving requests, authenticate that profile yourself with `opencode auth login`. Do not copy the normal OpenCode database, credentials, or WAL files into it.
 
 Queue files are stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
 If the queue directory cannot be created or written, the MCP tool now returns a structured failure instead of looking like a dropped connection.
@@ -125,6 +131,8 @@ npm install --prefix <runtime-dir>
 - Do not point it at broad parent directories by default.
 - Diff context now goes through a conservative best-effort secret redaction pass before it is sent to OpenCode, but that does not replace your own repository hygiene or disclosure judgment.
 - The bundled advisor blocks writes and denies `.env` reads, but that does not replace repository-level access control.
+
+For every variable, default, unit, and adjustment guideline, see [CONFIGURATION.md](CONFIGURATION.md). For supported platforms, see [COMPATIBILITY.md](COMPATIBILITY.md).
 
 ## Common Failures
 

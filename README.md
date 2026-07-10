@@ -21,6 +21,15 @@ Current docs and tests are validated against OpenCode CLI `1.17.13`.
 - Supported mode: source/GitHub install with local OpenCode agent templates
 - npm package publication is planned for a future release and is not available yet
 
+## Documentation
+
+- [Install](docs/INSTALL.md)
+- [Usage](docs/USAGE.md)
+- [Configuration reference](docs/CONFIGURATION.md)
+- [Architecture and trust boundaries](docs/ARCHITECTURE.md)
+- [Compatibility](docs/COMPATIBILITY.md)
+- [Example Codex configuration](docs/opencode-advisor.example.toml)
+
 ## Unofficial Compatibility Notice
 
 This is an unofficial community project. It is not affiliated with, endorsed by, or sponsored by OpenAI, Codex, OpenCode, or the maintainers of those products. "Codex" and "OpenCode" are referenced only for compatibility and integration context.
@@ -93,20 +102,26 @@ Add this MCP config to Codex:
 [mcp_servers.opencode_advisor]
 command = "node"
 args = ["<repo-root>\\src\\server.mjs"]
+# macOS/Linux: args = ["/absolute/path/to/opencode-advisor-mcp/src/server.mjs"]
 startup_timeout_sec = 30
 tool_timeout_sec = 420
 
 [mcp_servers.opencode_advisor.env]
 OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root-or-semicolon-list>"
+OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-advisor-profile-data-dir>"
 OPENCODE_ADVISOR_TIMEOUT_MS = "300000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
+# Optional: only an absolute executable path is accepted.
+# OPENCODE_ADVISOR_OPENCODE_CMD = "C:\\Program Files\\OpenCode\\opencode.exe"
 ```
 
 Replace `<repo-root>` with the absolute path to this source checkout.
 
 `OPENCODE_ADVISOR_ALLOWED_ROOTS` accepts a semicolon-separated list. If a Windows path itself contains a semicolon, wrap that one path in double quotes, for example `"C:\workspace\team;alpha";C:\workspace\other`.
 
-Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or Codex may cut off the MCP tool before the inner OpenCode timeout is reached.
+`startup_timeout_sec` only controls initial stdio connection establishment. Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or Codex may cut off the MCP tool before the inner OpenCode timeout is reached.
+
+The dedicated profile is intentionally separate from normal OpenCode storage. In that profile, run `opencode auth login` yourself before using the server. Do not copy a regular OpenCode database, credentials, or WAL files into it.
 
 After the agent template is installed, set allowed roots in the same shell that will run doctor. The terminal check does not inherit MCP env from the Codex config block above.
 
@@ -154,6 +169,8 @@ The server returns structured JSON with stable error codes such as `invalid_cwd`
 
 `OPENCODE_ADVISOR_ALLOWED_ROOTS` is enforced against canonical filesystem paths for the requested working directory and configured roots, so directory links that escape an allowed root are rejected. This is a read-only scope guard, not a complete OS sandbox.
 
+See [docs/USAGE.md](docs/USAGE.md) for all input fields, `goal` semantics, polling, and diff behavior. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for every environment variable and its default.
+
 Queue defaults are conservative:
 
 - global concurrency: `4`
@@ -200,3 +217,15 @@ Release and acceptance steps live in:
 - [docs/USAGE.md](docs/USAGE.md)
 - [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)
 - [RELEASING.md](RELEASING.md)
+
+## FAQ
+
+**Why is a task queued?** It is still pending locally; poll `get_opencode_task` with the returned `task_id`.
+
+**Why does the advisor have a separate OpenCode profile?** Advisor-created sessions must not pollute the user's normal OpenCode session list. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+**Can this safely serve multiple users?** No. It is a local single-user tool, not a tenant-isolated service.
+
+## Project Links
+
+[License](LICENSE) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) · [Support](SUPPORT.md) · [Issue governance](ISSUES_SUMMARY.md)

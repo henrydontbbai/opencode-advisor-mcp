@@ -13,6 +13,10 @@ const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const installDoc = readFileSync(new URL("../docs/INSTALL.md", import.meta.url), "utf8");
 const usageDoc = readFileSync(new URL("../docs/USAGE.md", import.meta.url), "utf8");
 const acceptanceDoc = readFileSync(new URL("../docs/ACCEPTANCE.md", import.meta.url), "utf8");
+const architectureDoc = readFileSync(new URL("../docs/ARCHITECTURE.md", import.meta.url), "utf8");
+const compatibilityDoc = readFileSync(new URL("../docs/COMPATIBILITY.md", import.meta.url), "utf8");
+const configurationDoc = readFileSync(new URL("../docs/CONFIGURATION.md", import.meta.url), "utf8");
+const exampleConfig = readFileSync(new URL("../docs/opencode-advisor.example.toml", import.meta.url), "utf8");
 const releasingDoc = readFileSync(new URL("../RELEASING.md", import.meta.url), "utf8");
 const repoRoot = new URL("../", import.meta.url);
 const testRunnerScript = readFileSync(
@@ -169,4 +173,30 @@ test("docs describe the current queue knobs and pending semantics", () => {
   assert.match(usageDoc, /expired .* not timeout/i);
   assert.match(usageDoc, /local diagnosis/i);
   assert.match(acceptanceDoc, /expired status rather than timeout/i);
+});
+
+test("docs provide a complete configuration, architecture, and compatibility reference", () => {
+  for (const key of [
+    "OPENCODE_ADVISOR_ALLOWED_ROOTS",
+    "OPENCODE_ADVISOR_OPENCODE_DATA_HOME",
+    "OPENCODE_ADVISOR_OPENCODE_CMD",
+    "OPENCODE_ADVISOR_TIMEOUT_MS",
+    "OPENCODE_ADVISOR_GIT_TIMEOUT_MS",
+    "OPENCODE_ADVISOR_MAX_DIFF_CHARS",
+    "OPENCODE_ADVISOR_SESSION_RETENTION_MS",
+    "OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS",
+    "OPENCODE_ADVISOR_TEST_FILE_TIMEOUT_MS",
+  ]) {
+    assert.match(configurationDoc, new RegExp(key));
+  }
+
+  assert.match(architectureDoc, /MCP.*preflight.*Git.*Queue.*OpenCode/i);
+  assert.match(architectureDoc, /single-user/i);
+  assert.match(compatibilityDoc, /Windows/i);
+  assert.match(compatibilityDoc, /macOS|Linux/i);
+  assert.match(exampleConfig, /startup_timeout_sec/);
+  assert.match(exampleConfig, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/);
+  assert.match(usageDoc, /\bgoal\b/i);
+  assert.match(usageDoc, /base_ref/i);
+  assert.match(usageDoc, /get_opencode_task/i);
 });

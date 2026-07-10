@@ -2,6 +2,15 @@
 
 Use the reviewer when you want a second pass on the current Git state. Use the planner when you already have a direction and want OpenCode to tighten it without taking over implementation.
 
+## Three-Minute Path
+
+1. Install both bundled agents and authenticate the dedicated advisor profile.
+2. Set `OPENCODE_ADVISOR_ALLOWED_ROOTS` and `OPENCODE_ADVISOR_OPENCODE_DATA_HOME`.
+3. Run `npm run doctor`.
+4. Ask Codex to call `ask_opencode_advisor` with a narrow `cwd`.
+
+If an ask returns `queued`, poll rather than submitting the same request again.
+
 ## Typical Prompts
 
 ```text
@@ -35,6 +44,24 @@ Role boundaries:
 - `ask_opencode_advisor`: reviewer only; it should not write files, execute shell commands, commit, or take over implementation
 - `ask_opencode_planner`: planning partner only; it should not decide the final plan, implement code, or expand scope on its own
 - `get_opencode_task`: task lookup for queued or running planner/reviewer jobs
+
+## Input Fields
+
+Both ask tools accept:
+
+| Field | Meaning |
+| --- | --- |
+| `cwd` | Repository working directory; it must be under an allowed root. |
+| `question` | The specific question for this review or planning pass. |
+| `goal` | The broader outcome or release objective that gives the question context. |
+| `paths` | Optional literal relative paths to constrain Git context. |
+| `include_status` / `include_diff` | Whether to include Git status/diff context. |
+| `base_ref` | Base ref for unstaged comparison; defaults to `HEAD`. For a main-relative review, pass `main`. |
+| `max_diff_chars` | Optional diff-context cap. |
+
+The planner additionally accepts `current_plan` and `constraints`. `question` is the immediate request; `goal` is the higher-level result to protect.
+
+Unstaged diffs are compared to `base_ref`; staged diffs are always compared to `HEAD`. Use `git add -A` when you want staged changes included deliberately.
 
 ## Privacy And Authorization
 
@@ -89,6 +116,18 @@ If the queue is busy, the ask tool may return:
 
 queued/running is pending, not failed. Keep that phase open and call `get_opencode_task` later with the returned `task_id`.
 
+Example polling flow:
+
+```json
+{ "ok": false, "error": "queued", "details": { "task_id": "ocq_example", "retry_after_ms": 30000 } }
+```
+
+Wait roughly `retry_after_ms`, then call:
+
+```text
+get_opencode_task({ "task_id": "ocq_example" })
+```
+
 When the task is finished, `get_opencode_task` returns the same public result shape you would have received inline:
 
 - reviewer results keep `advisor_text`
@@ -122,10 +161,13 @@ If the queue directory cannot be created or written, the ask/get-task flow shoul
 
 ## Notes
 
-- Each review run creates an OpenCode session record
+- Each review run creates an isolated OpenCode session record in the dedicated advisor profile
 - The model/provider behavior is controlled by your local OpenCode configuration, not by this repository
 - Current implementation is a one-shot review tool, not a persistent OpenCode server
 - Inner review timeout is controlled by `OPENCODE_ADVISOR_TIMEOUT_MS`; keep outer MCP `tool_timeout_sec` larger so Codex does not truncate the run first
+- `npm run print-agent -- planner` prints the planner template; `npm run print-agent -- codex-planning-partner` is the equivalent raw agent-name form
+
+For configuration defaults and retention behavior, see [CONFIGURATION.md](CONFIGURATION.md). For the request/queue lifecycle, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Local Doctor
 

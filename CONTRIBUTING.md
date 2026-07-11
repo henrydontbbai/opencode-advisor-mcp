@@ -8,6 +8,7 @@ Thanks for contributing.
 npm install
 npm run smoke
 npm test
+npm run test:doctor
 ```
 
 If you use the local OpenCode advisor flow, also install the bundled `codex-advisor.md` template and keep your allowed roots narrow.
@@ -25,6 +26,7 @@ If you use the local OpenCode advisor flow, also install the bundled `codex-advi
 Before opening a pull request:
 
 - run `npm test`
+- run `npm run test:doctor`
 - run `npm run smoke`
 - explain the user-visible behavior change
 - note any privacy, disclosure, or packaging impact

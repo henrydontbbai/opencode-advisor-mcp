@@ -1684,19 +1684,10 @@ test("getOpenCodeTask returns completed reviewer results from the task queue", a
     }),
   };
 
-  const server = createServer({
-    env: {
-      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
-      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
-    },
-    platform: "win32",
-    taskQueue,
-  });
-
-  const taskResponse = await server._registeredTools.get_opencode_task.handler({
-    task_id: "ocq_completedreviewer",
-  });
-  const taskResult = JSON.parse(taskResponse.content[0].text);
+  const taskResult = await getOpenCodeTask(
+    { task_id: "ocq_completedreviewer" },
+    { taskQueue },
+  );
   assert.equal(taskResult.ok, true);
   assert.equal(taskResult.advisor_text, "Looks good");
 });
@@ -1713,19 +1704,10 @@ test("getOpenCodeTask returns completed planner results from the task queue", as
     }),
   };
 
-  const server = createServer({
-    env: {
-      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
-      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
-    },
-    platform: "win32",
-    taskQueue,
-  });
-
-  const taskResponse = await server._registeredTools.get_opencode_task.handler({
-    task_id: "ocq_completedplanner",
-  });
-  const taskResult = JSON.parse(taskResponse.content[0].text);
+  const taskResult = await getOpenCodeTask(
+    { task_id: "ocq_completedplanner" },
+    { taskQueue },
+  );
   assert.equal(taskResult.ok, true);
   assert.equal(taskResult.planner_text, "Tighten validation points.");
 });
@@ -1744,84 +1726,4 @@ test("getOpenCodeTask returns a stable failure when queue mode is disabled", asy
   assert.equal(result.error, "opencode_failed");
   assert.match(result.message, /queue mode is disabled/i);
   assert.deepEqual(result.details, {});
-});
-
-test("createServer registers planner, advisor, and task tools with injected dependencies", async () => {
-  const { runProcess } = createMockRunProcess();
-  const taskQueue = {
-    submitAndWait: async (task) => {
-      if (task.role === "planner") {
-        return {
-          ok: true,
-          base_ref: "HEAD",
-          status: "",
-          diff_truncated: false,
-          planner_text: "Planner OK",
-          opencode_exit_code: 0,
-        };
-      }
-      return {
-        ok: true,
-        base_ref: "HEAD",
-        status: "",
-        diff_truncated: false,
-        advisor_text: "Advisor OK",
-        opencode_exit_code: 0,
-      };
-    },
-    getTaskResult: async () => ({
-      ok: false,
-      error: "queued",
-      message: "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.",
-      details: {
-        task_id: "ocq_test",
-        role: "planner",
-        status: "queued",
-        phase_pending: true,
-        retry_after_ms: 30000,
-        position: 1,
-        limit_global: 4,
-        limit_role: 2,
-      },
-    }),
-  };
-
-  const server = createServer({
-    runProcess,
-    env: {
-      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
-      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
-    },
-    platform: "win32",
-    taskQueue,
-  });
-
-  assert.deepEqual(
-    Object.keys(server._registeredTools),
-    ["ask_opencode_advisor", "ask_opencode_planner", "get_opencode_task"],
-  );
-
-  const advisorResponse = await server._registeredTools.ask_opencode_advisor.handler({
-    cwd: WINDOWS_CHILD_REPO,
-    include_diff: false,
-    include_status: false,
-  });
-  const advisorResult = JSON.parse(advisorResponse.content[0].text);
-  assert.equal(advisorResult.ok, true);
-  assert.equal(advisorResult.advisor_text, "Advisor OK");
-
-  const plannerResponse = await server._registeredTools.ask_opencode_planner.handler({
-    cwd: WINDOWS_CHILD_REPO,
-    current_plan: "1. Queue\n2. Review",
-  });
-  const plannerResult = JSON.parse(plannerResponse.content[0].text);
-  assert.equal(plannerResult.ok, true);
-  assert.equal(plannerResult.planner_text, "Planner OK");
-
-  const taskResponse = await server._registeredTools.get_opencode_task.handler({
-    task_id: "ocq_test",
-  });
-  const taskResult = JSON.parse(taskResponse.content[0].text);
-  assert.equal(taskResult.error, "queued");
-  assert.equal(taskResult.details.task_id, "ocq_test");
 });

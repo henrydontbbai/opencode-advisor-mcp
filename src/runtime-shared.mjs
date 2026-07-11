@@ -65,6 +65,12 @@ export function pathForPlatform(platform = process.platform) {
 }
 
 export function positiveNumber(value, fallback) {
+  if (
+    (typeof value !== "number" && typeof value !== "string")
+    || (typeof value === "string" && !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value))
+  ) {
+    return fallback;
+  }
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
@@ -155,11 +161,12 @@ function isAssistantTextEvent(event) {
   return typeof event?.part?.text === "string" || (event?.type === "text" && typeof event?.text === "string");
 }
 
-function valueHasPattern(value, pattern) {
+export function valueHasPattern(value, pattern, seen = new WeakSet()) {
   if (typeof value === "string") return pattern.test(value);
-  if (Array.isArray(value)) return value.some((entry) => valueHasPattern(entry, pattern));
   if (value && typeof value === "object") {
-    return Object.values(value).some((entry) => valueHasPattern(entry, pattern));
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return Object.values(value).some((entry) => valueHasPattern(entry, pattern, seen));
   }
   return false;
 }

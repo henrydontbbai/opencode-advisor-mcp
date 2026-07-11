@@ -443,6 +443,17 @@ test("extractOpenCodeText removes dangling think preambles before the final answ
   assert.equal(extractOpenCodeText(stdout), "## Summary\nOK");
 });
 
+test("extractOpenCodeText removes nested and orphaned think tags without leaking reasoning text", () => {
+  const stdout = JSON.stringify({
+    type: "text",
+    part: {
+      text: "<think>outer<think>inner</think>still hidden</think>Visible</think> tail",
+    },
+  });
+
+  assert.equal(extractOpenCodeText(stdout), "Visible tail");
+});
+
 test("extractOpenCodeText supports top-level text and mixed fallback lines", () => {
   const stdout = [
     "plain fallback",
@@ -1295,6 +1306,27 @@ test("askOpenCodeAdvisor falls back to default timeout for invalid timeout env",
   const opencodeCall = calls.find((call) => call.command === "opencode");
   assert.equal(result.ok, true);
   assert.equal(opencodeCall.options.timeoutMs, 300000);
+});
+
+test("askOpenCodeAdvisor applies the configured Git timeout without changing OpenCode timeout", async () => {
+  const { runProcess, calls } = createMockRunProcess();
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: WINDOWS_CHILD_REPO, include_diff: false },
+    {
+      runProcess,
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+        OPENCODE_ADVISOR_GIT_TIMEOUT_MS: "12345",
+      },
+      platform: "win32",
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(calls.find((call) => call.command === "git").options.timeoutMs, 12345);
+  assert.equal(calls.find((call) => call.command === "opencode").options.timeoutMs, 300000);
 });
 
 test("askOpenCodeAdvisor applies max diff chars from env", async () => {

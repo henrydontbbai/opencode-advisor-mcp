@@ -108,6 +108,7 @@ Replace `<repo-root>` with the absolute path to this source checkout.
 `OPENCODE_ADVISOR_ALLOWED_ROOTS` accepts a semicolon-separated list. If a Windows path itself contains a semicolon, wrap that one path in double quotes, for example `"C:\workspace\team;alpha";C:\workspace\other`.
 
 `OPENCODE_ADVISOR_OPENCODE_DATA_HOME` is required and must be an absolute, dedicated directory for advisor-managed OpenCode sessions. For example, use `%USERPROFILE%\.codex\opencode-advisor\opencode-data` on Windows or `$HOME/.codex/opencode-advisor/opencode-data` on macOS/Linux. Authenticate that isolated profile yourself with `opencode auth login` while `XDG_DATA_HOME` points at the same directory. The server never copies your normal OpenCode database, credentials, or WAL files into this profile.
+`OPENCODE_ADVISOR_OPENCODE_CMD` is optional. Leave it unset to use `opencode` from PATH; on Windows, the server falls back to a small set of known global-install locations only if PATH launch fails. If you override it, it must be an existing absolute OpenCode executable path (an `.exe` on Windows), not a command line or shell alias.
 
 Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or Codex may cut off the MCP tool before the inner OpenCode timeout is reached.
 

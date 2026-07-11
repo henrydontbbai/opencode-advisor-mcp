@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { askOpenCodeAdvisor, askOpenCodePlanner, extractOpenCodeText } from "../src/server.mjs";
-import { runProcess } from "../src/opencode-core.mjs";
+import {
+  askOpenCodeAdvisor,
+  askOpenCodePlanner,
+  extractOpenCodeText,
+} from "../src/server.mjs";
+import { getOpenCodeDataHome, runProcess } from "../src/opencode-core.mjs";
 import {
   DEFAULT_TIMEOUT_MS,
   PLANNER_SUCCESS_RESPONSE_KEYS,
@@ -29,6 +33,13 @@ const runCommand = runProcess;
 
 function unique(items) {
   return [...new Set(items)];
+}
+
+export function getDoctorOpenCodeEnv(env = process.env, pathApi) {
+  return {
+    ...env,
+    XDG_DATA_HOME: getOpenCodeDataHome(env, pathApi),
+  };
 }
 
 export function findPayloadLeaks(payload, { role = "reviewer", cwd } = {}) {
@@ -216,13 +227,17 @@ export async function runDoctor({
 } = {}) {
   const timeoutMs = positiveNumber(env.OPENCODE_ADVISOR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
   const steps = [];
+  let directEnv = env;
+  if (runCommandImpl === runCommand) {
+    directEnv = getDoctorOpenCodeEnv(env);
+  }
   const opencodeCommand = resolveOpencodeCommand(env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", { env, platform, exists });
 
   for (const directCheck of DIRECT_AGENT_CHECKS) {
     const result = await runDirectAgentCheck({
       opencodeCommand,
       cwd,
-      env,
+      env: directEnv,
       platform,
       timeoutMs,
       runCommandImpl,

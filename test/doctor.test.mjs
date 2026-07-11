@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runDoctor, findPayloadLeaks } from "../scripts/opencode-advisor-doctor.mjs";
+import path from "node:path";
+import { getDoctorOpenCodeEnv, runDoctor, findPayloadLeaks } from "../scripts/opencode-advisor-doctor.mjs";
 import {
   createPlannerSuccessResponse,
   createSuccessResponse,
@@ -10,6 +11,7 @@ import {
 
 const WINDOWS_ALLOWED_ROOT = "C:\\workspace\\repo-root";
 const WINDOWS_CHILD_REPO = `${WINDOWS_ALLOWED_ROOT}\\project`;
+const WINDOWS_DATA_HOME = "C:\\Users\\codex\\opencode-advisor-data";
 
 function createCommandResult(overrides = {}) {
   return {
@@ -110,6 +112,22 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
     useQueue: false,
   });
   assert.equal(report.steps.every((step) => step.ok), true);
+});
+
+test("getDoctorOpenCodeEnv requires and injects the dedicated data home", () => {
+  const env = {
+    OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+    OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+  };
+
+  assert.deepEqual(getDoctorOpenCodeEnv(env, path.win32), {
+    ...env,
+    XDG_DATA_HOME: WINDOWS_DATA_HOME,
+  });
+  assert.throws(
+    () => getDoctorOpenCodeEnv({ OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, path.win32),
+    /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/i,
+  );
 });
 
 test("runDoctor classifies missing opencode command", async () => {

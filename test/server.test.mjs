@@ -24,6 +24,7 @@ const WINDOWS_CHILD_REPO = `${WINDOWS_ALLOWED_ROOT}\\project`;
 const WINDOWS_REVIEW_ROOT = "C:\\workspace\\review-root";
 const WINDOWS_REVIEW_CHILD = `${WINDOWS_REVIEW_ROOT}\\project`;
 const WINDOWS_OTHER_PATH = "C:\\windows\\not-allowed.txt";
+const WINDOWS_DATA_HOME = "C:\\Users\\codex\\opencode-advisor-data";
 const tempDirs = new Set();
 const PROCESS_FIXTURE = fileURLToPath(new URL("./fixtures/process-fixture.mjs", import.meta.url));
 const TREE_PARENT_FIXTURE = fileURLToPath(new URL("./fixtures/tree-parent.mjs", import.meta.url));
@@ -246,6 +247,58 @@ test("createServer rejects startup when allowed roots are not configured", () =>
   assert.throws(
     () => createServer({ env: {}, platform: "win32" }),
     /OPENCODE_ADVISOR_ALLOWED_ROOTS/i,
+  );
+});
+
+test("createServer requires an absolute dedicated OpenCode data home", () => {
+  assert.throws(
+    () => createServer({
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+      },
+      platform: "win32",
+    }),
+    /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/i,
+  );
+
+  assert.throws(
+    () => createServer({
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+        OPENCODE_ADVISOR_OPENCODE_DATA_HOME: "relative-profile",
+      },
+      platform: "win32",
+    }),
+    /absolute/i,
+  );
+
+  assert.doesNotThrow(() => createServer({
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+    },
+    platform: "win32",
+    path: path.win32,
+  }));
+});
+
+test("createServer uses the injected platform path semantics", () => {
+  assert.doesNotThrow(() => createServer({
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: "/workspace/repo-root",
+      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: "/tmp/opencode-advisor-data",
+    },
+    platform: "linux",
+  }));
+  assert.throws(
+    () => createServer({
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: "/workspace/repo-root",
+        OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+      },
+      platform: "linux",
+    }),
+    /absolute/i,
   );
 });
 
@@ -932,6 +985,100 @@ test("askOpenCodeAdvisor returns advisor text on mocked success path", async () 
   );
 });
 
+test("askOpenCodeAdvisor isolates queue sessions and records their internal session id", async () => {
+  const sessionIds = [];
+  const { runProcess, calls } = createMockRunProcess({
+    opencode: {
+      code: 0,
+      stdout: [
+        JSON.stringify({ type: "step", sessionID: "ses_internal" }),
+        JSON.stringify({ type: "text", part: { text: "Looks good" } }),
+      ].join("\n"),
+      stderr: "",
+      timedOut: false,
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    {
+      cwd: WINDOWS_CHILD_REPO,
+      include_diff: false,
+      include_status: false,
+    },
+    {
+      runProcess,
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+        OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+      },
+      platform: "win32",
+      realpath: async (candidate) => candidate,
+      taskId: "ocq_sessionmetadata",
+      onSessionId: async (sessionId) => {
+        sessionIds.push(sessionId);
+      },
+      useQueue: false,
+    },
+  );
+
+  const opencodeCall = calls.find((call) => call.command === "opencode");
+  assert.equal(result.ok, true);
+  assert.deepEqual(sessionIds, ["ses_internal"]);
+  assert.deepEqual(
+    opencodeCall.args,
+    [
+      "run",
+      "--agent",
+      "codex-advisor",
+      "--dir",
+      WINDOWS_CHILD_REPO,
+      "--format",
+      "json",
+      "--title",
+      "opencode-advisor:ocq_sessionmetadata",
+    ],
+  );
+  assert.equal(opencodeCall.options.env.XDG_DATA_HOME, WINDOWS_DATA_HOME);
+  assert.equal("session_id" in result, false);
+});
+
+test("askOpenCodeAdvisor records a started session before returning timeout", async () => {
+  const sessionIds = [];
+  const { runProcess } = createMockRunProcess({
+    opencode: {
+      code: null,
+      stdout: JSON.stringify({ type: "step", sessionID: "ses_timeoutcleanup" }),
+      stderr: "",
+      timedOut: true,
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    {
+      cwd: WINDOWS_CHILD_REPO,
+      include_diff: false,
+      include_status: false,
+    },
+    {
+      runProcess,
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+        OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+      },
+      platform: "win32",
+      taskId: "ocq_timeoutcleanup",
+      onSessionId: async (sessionId) => {
+        sessionIds.push(sessionId);
+      },
+      useQueue: false,
+    },
+  );
+
+  assert.equal(result.error, "timeout");
+  assert.deepEqual(sessionIds, ["ses_timeoutcleanup"]);
+  assert.equal("session_id" in result, false);
+});
+
 test("askOpenCodePlanner defaults to status-only context and returns planner text", async () => {
   const { runProcess, calls } = createMockRunProcess({
     git: {
@@ -1343,7 +1490,10 @@ test("askOpenCodeAdvisor returns queued result when task stays pending", async (
   const result = await askOpenCodeAdvisor(
     { cwd: WINDOWS_CHILD_REPO },
     {
-      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+        OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+      },
       platform: "win32",
       taskQueue,
       realpath: async (candidate) => candidate,
@@ -1369,7 +1519,10 @@ test("getOpenCodeTask returns completed reviewer results from the task queue", a
   };
 
   const server = createServer({
-    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+    },
     platform: "win32",
     taskQueue,
   });
@@ -1395,7 +1548,10 @@ test("getOpenCodeTask returns completed planner results from the task queue", as
   };
 
   const server = createServer({
-    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+    },
     platform: "win32",
     taskQueue,
   });
@@ -1466,7 +1622,10 @@ test("createServer registers planner, advisor, and task tools with injected depe
 
   const server = createServer({
     runProcess,
-    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
+    },
     platform: "win32",
     taskQueue,
   });

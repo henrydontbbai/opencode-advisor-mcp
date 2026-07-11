@@ -57,6 +57,20 @@ export function parseAllowedRoots(input, env = process.env, pathApi = path) {
     });
 }
 
+export function getOpenCodeDataHome(env = process.env, pathApi = path) {
+  const configured = env.OPENCODE_ADVISOR_OPENCODE_DATA_HOME;
+  if (typeof configured !== "string" || !configured.trim()) {
+    throw new Error("OPENCODE_ADVISOR_OPENCODE_DATA_HOME must be configured before the MCP server starts.");
+  }
+  if (configured.includes("\0")) {
+    throw new Error("OPENCODE_ADVISOR_OPENCODE_DATA_HOME must not contain NUL bytes.");
+  }
+  if (!pathApi.isAbsolute(configured)) {
+    throw new Error("OPENCODE_ADVISOR_OPENCODE_DATA_HOME must be an absolute path.");
+  }
+  return pathApi.resolve(configured);
+}
+
 export function isPathInsideAllowedRoots(candidate, allowedRoots = parseAllowedRoots(), pathApi = path) {
   const resolved = pathApi.resolve(candidate);
   const caseInsensitive = pathApi.sep === "\\";
@@ -119,6 +133,18 @@ function stripModelReasoning(text) {
     const headingOffset = headingMatch.index + headingMatch[0].length - headingMatch[2].length;
     cleaned = `${cleaned.slice(0, start)}${remainder.slice(headingOffset)}`;
   }
+}
+
+function extractOpenCodeSessionId(stdout = "") {
+  for (const line of String(stdout).split(/\r?\n/)) {
+    try {
+      const event = JSON.parse(line);
+      if (typeof event?.sessionID === "string" && event.sessionID) {
+        return event.sessionID;
+      }
+    } catch {}
+  }
+  return null;
 }
 
 export function extractOpenCodeText(stdout) {
@@ -622,6 +648,22 @@ export async function preflightOpenCodeTask(role, input = {}, deps = {}) {
     };
   }
 
+  let opencodeDataHome = null;
+  try {
+    opencodeDataHome = getOpenCodeDataHome(runtime.env, runtime.path);
+  } catch (error) {
+    if (deps.runProcess) {
+      opencodeDataHome = null;
+    } else {
+      return {
+        ok: false,
+        error: "opencode_failed",
+        message: error.message,
+        details: {},
+      };
+    }
+  }
+
   const cwd = runtime.path.resolve(requestedCwd);
   const allowedRoots = parseAllowedRoots(undefined, runtime.env, runtime.path);
   const canonicalCwd = await canonicalizeAllowedCwd(cwd, allowedRoots, runtime);
@@ -646,6 +688,7 @@ export async function preflightOpenCodeTask(role, input = {}, deps = {}) {
       paths,
       timeoutMs: positiveNumber(runtime.env.OPENCODE_ADVISOR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
       maxDiffChars: positiveNumber(input.max_diff_chars ?? runtime.env.OPENCODE_ADVISOR_MAX_DIFF_CHARS, DEFAULT_MAX_DIFF_CHARS),
+      opencodeDataHome,
     },
   };
 }
@@ -666,6 +709,7 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
     paths,
     timeoutMs,
     maxDiffChars,
+    opencodeDataHome,
   } = preflight.normalized;
 
   let context;
@@ -702,8 +746,25 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
   try {
     result = await runtime.runProcess(
       opencodeCommand,
-      ["run", "--agent", roleDefaults.agentName, "--dir", cwd, "--format", "json"],
-      { cwd, input: prompt, timeoutMs, env: runtime.env, platform: runtime.platform },
+      [
+        "run",
+        "--agent",
+        roleDefaults.agentName,
+        "--dir",
+        cwd,
+        "--format",
+        "json",
+        ...(deps.taskId ? ["--title", `opencode-advisor:${deps.taskId}`] : []),
+      ],
+      {
+        cwd,
+        input: prompt,
+        timeoutMs,
+        env: opencodeDataHome
+          ? { ...runtime.env, XDG_DATA_HOME: opencodeDataHome }
+          : runtime.env,
+        platform: runtime.platform,
+      },
     );
   } catch (error) {
     return {
@@ -712,6 +773,11 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
       message: isSpawnError(error) ? OPENCODE_NOT_FOUND_MESSAGE : "OpenCode process failed during execution.",
       details: {},
     };
+  }
+
+  const sessionId = extractOpenCodeSessionId(result.stdout);
+  if (sessionId && deps.onSessionId) {
+    await deps.onSessionId(sessionId);
   }
 
   if (outputHasAgentFallback(result.stdout, result.stderr)) {

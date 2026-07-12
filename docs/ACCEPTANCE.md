@@ -1,242 +1,104 @@
 # Acceptance Checklist
 
-Run these checks before public GitHub release and after changes to server, package shape, agent, or install docs.
+## Automated Checks
 
-## Source Checks
-
-From the repository:
+From a source checkout:
 
 ```powershell
-npm install
+npm ci
 npm run smoke
 npm test
 npm run test:doctor
-```
-
-Expected: all tests pass.
-
-## Local Doctor Check
-
-This is an extra local runtime check for source installs. It is not part of the GitHub CI gate and it does not prove that an npm package has been published.
-
-From the repository root after the agent template is installed, set allowed roots in the same shell and then run doctor. This terminal check does not inherit MCP env from your Codex config.
-
-```powershell
-$env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
-npm run doctor
-```
-
-Expected:
-
-- the direct `codex-advisor` agent check passes
-- the direct `codex-planning-partner` agent check passes
-- the local `askOpenCodeAdvisor({ include_diff:false, include_status:false })` health check passes
-- the summary does not report forbidden fields such as `cwd`, `stderr_tail`, `stdout_tail`, or `allowed_roots`
-
-If doctor fails, use the bucket as first triage:
-
-- `opencode_not_found`
-- `agent_missing_or_fallback`
-- `invalid_cwd_or_allowed_roots`
-- `upstream_unavailable`
-- `timeout`
-- `generic_opencode_failure`
-
-## Packaging Checks
-
-Dry-run the package:
-
-```powershell
-npm pack --dry-run
-```
-
-Expected:
-
-- tarball is generated virtually without errors
-- only intended files are included
-- no `node_modules`, `.env`, logs, worktrees, temp files, or test fixtures ship in the tarball
-
-Check the installed CLI behavior:
-
-```powershell
 npm run print-agent
 npm run print-agent -- planner
+npm pack --dry-run
+git diff --check
 ```
 
-Expected:
+Expected: all tests pass, both agent templates print, and the dry-run tarball contains setup, doctor, profile modules, and no credentials or local profile artifacts.
 
-- default print command prints the bundled `codex-advisor.md` template
-- planner print command prints the bundled `codex-planning-partner.md` template
+## Independent Provider Check
 
-## Local Tarball Install Check
+Run `opencode-advisor-setup` in a terminal and configure a disposable or intended third-party provider. Confirm that setup rejects API key arguments and non-interactive input.
 
-This checks local package shape only. It does not prove that a public npm package has been published.
-
-From a disposable directory:
-
-```powershell
-npm pack
-npm install .\opencode-advisor-mcp-*.tgz
-npx opencode-advisor-agent
-```
-
-Expected:
-
-- install succeeds
-- `opencode-advisor-agent` prints the bundled template
-
-## OpenCode Agent Checks
-
-```powershell
-opencode agent list
-opencode run --agent codex-advisor --format json "Say OK only."
-opencode run --agent codex-planning-partner --format json "Say OK only."
-```
-
-Expected:
-
-- both bundled agents appear
-- each direct run completes
-- output does not include a fallback such as `agent "codex-advisor" not found`
-
-## Read-Only Negative Test
-
-Run from a disposable directory:
-
-```powershell
-opencode run --agent codex-advisor --format json "Use any available tools to create file SHOULD_NOT_EXIST.txt with text hello."
-Test-Path .\SHOULD_NOT_EXIST.txt
-```
-
-Expected:
-
-```text
-False
-```
-
-## MCP Behavior Checks
-
-Set a narrow allowed root first:
+Set a narrow root and run doctor:
 
 ```powershell
 $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
-```
-
-Valid repo:
-
-```powershell
-node -e "import('./src/server.mjs').then(async ({ askOpenCodeAdvisor }) => { const r = await askOpenCodeAdvisor({ cwd: process.cwd(), include_diff: false, include_status: false }); console.log(JSON.stringify(r, null, 2)); })"
+opencode-advisor-doctor
 ```
 
 Expected:
 
-- `ok: true`
-- success response does not expose an absolute local `cwd`
-- success response does not expose raw stderr tail
-- if diff context includes obvious token-like values, the prompt path should redact them before provider handoff
-- if the queue directory is unwritable, the response should fail structurally instead of looking like a broken MCP connection
+- both `codex-advisor` and `codex-planning-partner` direct checks use structured JSON
+- both runs use the independent profile, `--pure`, explicit configured models, and their configured `--variant` value when present
+- reviewer and planner can choose optional variants independently (for example reviewer `high` and planner `max`); a blank value uses the model default, and deployed provider/model support determines which names are valid
+- setup does not read normal OpenCode, Codex, or Cockpit provider settings or require a normal OpenCode account-login session
+- doctor output contains no provider URL, model selection, or API key
+- `provider_setup_required`, `provider_authentication_failed`, timeout, fallback, empty output, and non-JSON output fail the gate
 
-Planner path:
+## Profile Recovery And Storage
 
-```powershell
-node -e "import('./src/server.mjs').then(async ({ askOpenCodePlanner }) => { const r = await askOpenCodePlanner({ cwd: process.cwd(), current_plan: '1. Validate config\\n2. Run doctor' }, { useQueue: false }); console.log(JSON.stringify(r, null, 2)); })"
-```
+In a disposable profile, test a stale credential-manifest fingerprint and a manifest that no longer matches its generated OpenCode overlay. A setup cancelled before profile writing begins may leave the prior valid profile usable.
 
 Expected:
 
-- `ok: true`
-- response contains `planner_text`
-- response does not expose an absolute local `cwd`
+- each incomplete or binding-mismatched profile condition is fail-closed before queue submission: MCP returns `opencode_failed` with setup guidance, and doctor reports `provider_setup_required`
+- recovery is a fresh interactive `opencode-advisor-setup` run, never a manual edit to manifest, overlay, agent, or credential files
+- Windows uses CurrentUser DPAPI for the credential
+- POSIX uses the permission fallback: profile directories are private `0700`, the credential file is `0600`, and a group/world-readable artifact is rejected where those checks are enforceable
 
-Queued path:
+## MCP Behavior
 
-```text
-If an ask tool returns { ok:false, error:"queued" }, keep the phase pending and call get_opencode_task with the returned task_id.
-```
+Call reviewer and planner against a repository inside `OPENCODE_ADVISOR_ALLOWED_ROOTS`.
 
-Queue env coverage to keep documented and testable:
+Expected:
 
-```text
-OPENCODE_ADVISOR_QUEUE_MAX_PENDING
-OPENCODE_ADVISOR_TASK_TTL_MS
-OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS
-OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS
-OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS
-OPENCODE_ADVISOR_QUEUE_POLL_MS
-```
+- reviewer success contains `advisor_text`
+- planner success contains `planner_text`
+- both agent templates retain `permission: "*": deny`; they analyze only the supplied request, Git status/diff, and planner plan/constraints rather than reading repository files or running tools
+- success responses do not expose profile details, allowed roots, raw stderr, or credentials
+- missing setup returns `opencode_failed` and setup guidance before a queue task is created
+- invalid cwd returns `invalid_cwd`; invalid paths return `invalid_paths`
 
-Stale-threshold guardrail to keep documented and testable:
-
-```text
-Lowering OPENCODE_ADVISOR_TIMEOUT_MS alone should not shrink stale detection below the built-in safety floor unless the stale env vars are explicitly overridden.
-```
+## Queue Behavior
 
 Manual queued-path poll:
 
 ```text
-After polling with get_opencode_task, the completed result should preserve `advisor_text` or `planner_text` rather than changing to a different success shape.
-If the task ages out, it should return an explicit expired status rather than timeout.
-```
-
-Invalid cwd:
-
-```powershell
-node -e "import('./src/server.mjs').then(async ({ askOpenCodeAdvisor }) => { const r = await askOpenCodeAdvisor({ cwd: 'C:\\Windows', include_diff: false, include_status: false }); console.log(JSON.stringify(r, null, 2)); })"
+If an ask tool returns { ok:false, error:"queued" }, keep the phase pending and poll get_opencode_task with its task_id.
 ```
 
 Expected:
 
-- `ok: false`
-- `error: "invalid_cwd"`
-- response does not expose `allowed_roots`
-- response does not echo the rejected absolute path
+- completed result should preserve `advisor_text` or `planner_text`
+- an expired status rather than timeout identifies stale local queue state
+- task JSON and detached runner logs contain no provider URL, model selection, or credential
 
-Invalid path:
+## Responses API Contract
+
+Run the opt-in local provider fixture outside CI for both transports. With a local OpenCode executable available, use:
 
 ```powershell
-node -e "import('./src/server.mjs').then(async ({ askOpenCodeAdvisor }) => { const r = await askOpenCodeAdvisor({ cwd: process.cwd(), paths: ['C:\\Windows\\not-allowed.txt'], include_diff: false, include_status: false }); console.log(JSON.stringify(r, null, 2)); })"
+$env:OPENCODE_ADVISOR_RUN_PROVIDER_CONTRACT = "1"
+node --test test/provider-contract.test.mjs
 ```
 
 Expected:
 
-- `ok: false`
-- `error: "invalid_paths"`
+- `responses` receives `/v1/responses` with streaming enabled; OpenCode accepts `response.output_text.delta`, `response.output_text.done`, and `response.completed` text events
+- the local fixture observes reviewer `high` and planner `max` as separate `reasoning.effort` values for its compatible Responses model; production setup must use only values supported by its provider/model
+- a Responses `error` followed by `response.failed` fails closed without exposing the configured credential
+- `chat_completions` receives `/v1/chat/completions` with streaming enabled, standard chunks, and `[DONE]`
+- Responses function-call SSE is covered through `response.function_call_arguments.delta`, `response.function_call_arguments.done`, and `response.output_item.done`; the fixture call is never executed because both built-in agents retain `permission: "*": deny`
+- that built-in-agent tool-event path ends as the fixture's short configured `timeout`, not a successful tool round-trip or assistant result, and exposes no credential
 
-Invalid base ref:
+The fixture is an operator acceptance check, not a no-OpenCode CI dependency.
 
-```powershell
-node -e "import('./src/server.mjs').then(async ({ askOpenCodeAdvisor }) => { const r = await askOpenCodeAdvisor({ cwd: process.cwd(), base_ref: '--output=SHOULD_NOT_EXIST.txt' }); console.log(JSON.stringify(r, null, 2)); })"
-```
+## Windows Command Override
 
-Expected:
-
-- `ok: false`
-- `error: "invalid_paths"`
-
-## History And Release Checks
-
-Before creating a public remote or public tag:
-
-```powershell
-git log --all --decorate --stat --oneline
-$pattern = "gho_|npm_|C:\\Users\\|/Users/|/home/"
-git rev-list --all | ForEach-Object { git grep -n -E $pattern $_ }
-```
-
-Expected:
-
-- no secrets or tokens
-- no personal path leakage intended for public history
-- no `node_modules` or runtime-only files in tracked history
+When setting `OPENCODE_ADVISOR_OPENCODE_CMD` on Windows, use an existing absolute `.exe` from a trusted location. Confirm that a `.cmd`, `.bat`, relative path, or command string with arguments is rejected before any child process starts.
 
 ## Final Review Gate
 
-Before pushing public history or creating a GitHub release:
-
-- run `npm run smoke`
-- run `npm test`
-- run `npm run test:doctor`
-- run `npm run doctor` for source installs
-- inspect `npm pack --dry-run`
-- run one final OpenCode `codex-advisor` read-only review
-- verify GitHub repo URL, package version, and release tag all match the intended public release
+Run a real reviewer and planner. Only explicit `BLOCKER: none` conclusions qualify as release evidence. A 401, timeout, agent fallback, empty conclusion, or generic error does not qualify.

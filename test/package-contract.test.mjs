@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { gunzipSync } from "node:zlib";
 
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -12,11 +15,11 @@ const packageLock = JSON.parse(
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const installDoc = readFileSync(new URL("../docs/INSTALL.md", import.meta.url), "utf8");
 const usageDoc = readFileSync(new URL("../docs/USAGE.md", import.meta.url), "utf8");
-const acceptanceDoc = readFileSync(new URL("../docs/ACCEPTANCE.md", import.meta.url), "utf8");
-const architectureDoc = readFileSync(new URL("../docs/ARCHITECTURE.md", import.meta.url), "utf8");
-const compatibilityDoc = readFileSync(new URL("../docs/COMPATIBILITY.md", import.meta.url), "utf8");
 const configurationDoc = readFileSync(new URL("../docs/CONFIGURATION.md", import.meta.url), "utf8");
-const exampleConfig = readFileSync(new URL("../docs/opencode-advisor.example.toml", import.meta.url), "utf8");
+const architectureDoc = readFileSync(new URL("../docs/ARCHITECTURE.md", import.meta.url), "utf8");
+const exampleToml = readFileSync(new URL("../examples/codex-mcp.toml", import.meta.url), "utf8");
+const acceptanceDoc = readFileSync(new URL("../docs/ACCEPTANCE.md", import.meta.url), "utf8");
+const compatibilityDoc = readFileSync(new URL("../docs/COMPATIBILITY.md", import.meta.url), "utf8");
 const releasingDoc = readFileSync(new URL("../RELEASING.md", import.meta.url), "utf8");
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const serverSource = readFileSync(new URL("../src/server.mjs", import.meta.url), "utf8");
@@ -26,24 +29,169 @@ const testRunnerScript = readFileSync(
   new URL("../scripts/run-test-files.mjs", import.meta.url),
   "utf8",
 );
+const publishedMarkdown = [
+  { path: "README.md", text: readme },
+  ...readdirSync(new URL("../docs/", import.meta.url))
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => ({
+      path: `docs/${name}`,
+      text: readFileSync(new URL(`../docs/${name}`, import.meta.url), "utf8"),
+    })),
+];
+const publishedExamples = readdirSync(new URL("../examples/", import.meta.url))
+  .filter((name) => /\.(?:json|md|toml|ya?ml)$/i.test(name))
+  .map((name) => ({
+    path: `examples/${name}`,
+    text: readFileSync(new URL(`../examples/${name}`, import.meta.url), "utf8"),
+  }));
 
-function runNpmJson(args) {
-  const npmExecPath = process.env.npm_execpath;
-  if (npmExecPath) {
-    const stdout = execFileSync(process.execPath, [npmExecPath, ...args], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    });
-    return JSON.parse(stdout);
+function isRegularFile(filePath) {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function resolveNpmInvocation({
+  nodeExecPath = process.execPath,
+  npmExecPath = process.env.npm_execpath,
+  isFile = isRegularFile,
+} = {}) {
+  const bundledNpmCli = join(
+    dirname(nodeExecPath),
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+
+  for (const npmCliPath of [bundledNpmCli, npmExecPath]) {
+    if (
+      typeof npmCliPath === "string"
+      && basename(npmCliPath) === "npm-cli.js"
+      && isFile(npmCliPath)
+    ) {
+      return { command: nodeExecPath, args: [npmCliPath] };
+    }
   }
 
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const stdout = execFileSync(npmCommand, args, {
+  throw new Error("Unable to locate a verified npm CLI for package contract test.");
+}
+
+function runNpmJson(args) {
+  const invocation = resolveNpmInvocation();
+  const stdout = execFileSync(invocation.command, [...invocation.args, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
   });
   return JSON.parse(stdout);
 }
+
+function readTarEntries(tarballPath) {
+  const archive = gunzipSync(readFileSync(tarballPath));
+  const entries = new Map();
+  let offset = 0;
+
+  while (offset + 512 <= archive.length) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+
+    const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/, "");
+    const prefix = header.subarray(345, 500).toString("utf8").replace(/\0.*$/, "");
+    const sizeText = header.subarray(124, 136).toString("utf8").replace(/\0.*$/, "").trim();
+    const size = Number.parseInt(sizeText || "0", 8);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error(`Invalid tar entry size for ${name || "unnamed entry"}.`);
+    }
+
+    const bodyStart = offset + 512;
+    const bodyEnd = bodyStart + size;
+    if (bodyEnd > archive.length) {
+      throw new Error(`Truncated tar entry for ${name || "unnamed entry"}.`);
+    }
+
+    const entryPath = prefix ? `${prefix}/${name}` : name;
+    if (entryPath.startsWith("package/")) {
+      entries.set(entryPath.slice("package/".length), archive.subarray(bodyStart, bodyEnd).toString("utf8"));
+    }
+    offset = bodyStart + Math.ceil(size / 512) * 512;
+  }
+
+  return entries;
+}
+
+function readPublishedTarball() {
+  const destination = mkdtempSync(join(tmpdir(), "opencode-advisor-pack-"));
+  try {
+    const packResult = runNpmJson(["pack", "--json", "--pack-destination", destination]);
+    const tarball = Array.isArray(packResult) ? packResult[0] : packResult;
+    return readTarEntries(join(destination, tarball.filename));
+  } finally {
+    rmSync(destination, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+test("package contract npm launcher requires a verified Node CLI without a shell fallback", () => {
+  const nodeExecPath = join(
+    "test-node-home",
+    process.platform === "win32" ? "node.exe" : "node",
+  );
+  const npmExecPath = join("test-npm", "npm-cli.js");
+
+  assert.deepEqual(
+    resolveNpmInvocation({
+      nodeExecPath,
+      npmExecPath,
+      isFile: (candidate) => candidate === npmExecPath,
+    }),
+    { command: nodeExecPath, args: [npmExecPath] },
+  );
+  let isFileCalled = false;
+  assert.throws(
+    () => resolveNpmInvocation({
+      nodeExecPath,
+      npmExecPath,
+      isFile: () => {
+        isFileCalled = true;
+        return false;
+      },
+    }),
+    /Unable to locate a verified npm CLI/,
+  );
+  assert.equal(isFileCalled, true);
+});
+
+test("package contract npm launcher rejects directory and non-JS CLI candidates", () => {
+  const missingNodeExecPath = join(
+    "missing-node-home",
+    process.platform === "win32" ? "node.exe" : "node",
+  );
+  const directoryLikeCandidate = join("test-directory", "npm-cli.js");
+  const checkedCandidates = [];
+
+  assert.throws(
+    () => resolveNpmInvocation({
+      nodeExecPath: missingNodeExecPath,
+      npmExecPath: directoryLikeCandidate,
+      isFile: (candidate) => {
+        checkedCandidates.push(candidate);
+        return false;
+      },
+    }),
+    /Unable to locate a verified npm CLI/,
+  );
+  assert.equal(checkedCandidates.includes(directoryLikeCandidate), true);
+
+  assert.throws(
+    () => resolveNpmInvocation({
+      nodeExecPath: missingNodeExecPath,
+      npmExecPath: process.execPath,
+      isFile: (candidate) => candidate === process.execPath,
+    }),
+    /Unable to locate a verified npm CLI/,
+  );
+});
 
 test("default npm test excludes doctor-specific test coverage", () => {
   assert.equal(packageJson.scripts.test, "node scripts/run-test-files.mjs");
@@ -55,14 +203,18 @@ test("default npm test excludes doctor-specific test coverage", () => {
   assert.match(testRunnerScript, /test\/mcp-integration\.test\.mjs/);
   assert.match(testRunnerScript, /test\/queue-integration\.test\.mjs/);
   assert.match(testRunnerScript, /test\/bin\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/provider-credentials\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/provider-profile\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/provider-runtime\.test\.mjs/);
+  assert.match(testRunnerScript, /test\/setup-cli\.test\.mjs/);
   assert.doesNotMatch(testRunnerScript, /doctor\.test\.mjs/);
   assert.equal(packageJson.scripts["test:doctor"], "node --test test/doctor.test.mjs");
   assert.match(ciWorkflow, /npm run test:doctor/);
 });
 
-test("smoke script verifies both startup success with dedicated data home and startup failure without configuration", () => {
+test("smoke script verifies startup with allowed roots and failure without configuration", () => {
   assert.match(packageJson.scripts.smoke, /createServer\(\{ env \}\)/);
-  assert.match(packageJson.scripts.smoke, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/);
+  assert.doesNotMatch(packageJson.scripts.smoke, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/);
   assert.match(packageJson.scripts.smoke, /createServer\(\{ env: \{\} \}\)/);
   assert.doesNotMatch(packageJson.scripts.smoke, /_registeredTools/);
   assert.doesNotMatch(serverTestSource, /_registeredTools/);
@@ -74,34 +226,93 @@ test("package.json is the single source for the advertised server version", () =
   assert.doesNotMatch(serverSource, /version:\s*["']0\.2\.0["']/);
 });
 
-test("doctor stays out of the published CLI and files contract", () => {
+test("setup and doctor are published as separate non-MCP CLIs", () => {
   assert.equal(
-    Object.values(packageJson.bin).includes("scripts/opencode-advisor-doctor.mjs"),
-    false,
+    packageJson.bin["opencode-advisor-setup"],
+    "bin/opencode-advisor-setup.mjs",
   );
   assert.equal(
-    packageJson.files.some((entry) => entry === "scripts/" || entry.startsWith("scripts")),
-    false,
+    packageJson.bin["opencode-advisor-doctor"],
+    "bin/opencode-advisor-doctor.mjs",
   );
   assert.equal(
     packageJson.files.some((entry) => entry === "test/" || entry.startsWith("test")),
     false,
   );
-  assert.deepEqual(packageJson.files, ["src/", "agents/", "bin/", "README.md", "LICENSE"]);
-  assert.match(packageJson.scripts.doctor, /source checkout/i);
+  assert.deepEqual(packageJson.files, ["src/", "agents/", "bin/", "docs/", "examples/", "README.md", "LICENSE"]);
+  assert.equal(packageJson.scripts.setup, "node bin/opencode-advisor-setup.mjs");
+  assert.equal(packageJson.scripts.doctor, "node bin/opencode-advisor-doctor.mjs");
 });
 
-test("docs keep source install as the current path while npm stays unpublished", () => {
-  assert.match(readme, /Supported mode: source\/GitHub install/i);
-  assert.match(readme, /has not been published to npm yet/i);
-  assert.match(installDoc, /currently supports one public install mode:\s+[\r\n]+\s*1\. source checkout from GitHub/i);
-  assert.match(releasingDoc, /npm publication is a future optional path/i);
+test("package ships the documentation and MCP example referenced by its README", () => {
+  assert.equal(packageJson.files.includes("docs/"), true);
+  assert.equal(packageJson.files.includes("examples/"), true);
+  assert.match(readme, /\[examples\/codex-mcp\.toml\]/);
+  assert.match(readme, /\[docs\/CONFIGURATION\.md\]/);
+});
+
+test("published docs require independent provider setup and exclude legacy profile setup", () => {
+  for (const document of [readme, installDoc, configurationDoc, usageDoc, architectureDoc]) {
+    assert.match(document, /opencode-advisor-setup/i);
+  }
+
+  for (const { path, text } of publishedMarkdown) {
+    assert.doesNotMatch(text, /opencode auth login/i, path);
+    assert.doesNotMatch(text, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/, path);
+  }
+
+  for (const { path, text } of publishedExamples) {
+    assert.doesNotMatch(text, /opencode auth login/i, path);
+    assert.doesNotMatch(text, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/, path);
+    assert.doesNotMatch(
+      text,
+      /OPENCODE_CONFIG|api[_-]?key|\b(?:url|model|key|token|credential)\b/i,
+      path,
+    );
+  }
+
+  assert.equal(
+    existsSync(new URL("../docs/opencode-advisor.example.toml", import.meta.url)),
+    false,
+  );
+  assert.match(configurationDoc, /OPENCODE_ADVISOR_ALLOWED_ROOTS/);
+  assert.match(configurationDoc, /OPENCODE_ADVISOR_HOME/);
+  assert.match(architectureDoc, /OPENCODE_CONFIG_CONTENT/);
+  assert.match(architectureDoc, /OPENCODE_DISABLE_PROJECT_CONFIG/);
+  assert.match(architectureDoc, /OPENCODE_ADVISOR_PROVIDER_KEY/);
+  assert.match(exampleToml, /OPENCODE_ADVISOR_ALLOWED_ROOTS/);
+  assert.doesNotMatch(exampleToml, /API_KEY|TOKEN|SECRET|base_url|model/i);
+  assert.doesNotMatch(releasingDoc, /opencode auth login|OPENCODE_ADVISOR_OPENCODE_DATA_HOME/i);
+});
+
+test("docs distinguish source, tarball, and published-package setup paths and list every queue control", () => {
+  assert.match(readme, /npm run setup/);
+  assert.match(readme, /src\\\\server\.mjs/);
+  assert.match(readme, /after publication|published release/i);
+  assert.match(installDoc, /after publication|published release/i);
+  assert.match(releasingDoc, /credential-manifest binding/i);
+  assert.match(releasingDoc, /manifest-overlay binding/i);
+
+  const queueControls = [
+    "OPENCODE_ADVISOR_CONCURRENCY_GLOBAL",
+    "OPENCODE_ADVISOR_CONCURRENCY_PLANNER",
+    "OPENCODE_ADVISOR_CONCURRENCY_REVIEWER",
+    "OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS",
+    "OPENCODE_ADVISOR_QUEUE_RETRY_AFTER_MS",
+    "OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS",
+    "OPENCODE_ADVISOR_SESSION_RETENTION_MS",
+    "OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS",
+    "OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS",
+  ];
+  for (const control of queueControls) {
+    assert.match(usageDoc, new RegExp(control));
+    assert.match(configurationDoc, new RegExp(control));
+  }
 });
 
 test("real tarball contents stay aligned with the published package contract", () => {
-  const packResult = runNpmJson(["pack", "--dry-run", "--json"]);
-  const tarball = Array.isArray(packResult) ? packResult[0] : packResult;
-  const packedFiles = tarball.files.map((entry) => entry.path).sort();
+  const packedContents = readPublishedTarball();
+  const packedFiles = [...packedContents.keys()].sort();
 
   assert.deepEqual(packedFiles, [
     "LICENSE",
@@ -109,8 +320,21 @@ test("real tarball contents stay aligned with the published package contract", (
     "agents/codex-advisor.md",
     "agents/codex-planning-partner.md",
     "bin/opencode-advisor-agent.mjs",
+    "bin/opencode-advisor-doctor.mjs",
+    "bin/opencode-advisor-setup.mjs",
+    "docs/ACCEPTANCE.md",
+    "docs/ARCHITECTURE.md",
+    "docs/COMPATIBILITY.md",
+    "docs/CONFIGURATION.md",
+    "docs/GIT.md",
+    "docs/INSTALL.md",
+    "docs/USAGE.md",
+    "examples/codex-mcp.toml",
     "package.json",
+    "src/doctor.mjs",
     "src/opencode-core.mjs",
+    "src/provider-credentials.mjs",
+    "src/provider-profile.mjs",
     "src/queue-runner.mjs",
     "src/runtime-shared.mjs",
     "src/server.mjs",
@@ -121,6 +345,10 @@ test("real tarball contents stay aligned with the published package contract", (
     "agents/codex-advisor.md",
     "agents/codex-planning-partner.md",
     "bin/opencode-advisor-agent.mjs",
+    "bin/opencode-advisor-setup.mjs",
+    "bin/opencode-advisor-doctor.mjs",
+    "docs/CONFIGURATION.md",
+    "examples/codex-mcp.toml",
     "src/server.mjs",
     "README.md",
     "LICENSE",
@@ -145,6 +373,22 @@ test("real tarball contents stay aligned with the published package contract", (
   ]) {
     assert.equal(packedFiles.includes(forbiddenName), false);
   }
+
+  const packedMarkdown = packedFiles
+    .filter((entry) => entry === "README.md" || /^docs\/.*\.md$/i.test(entry))
+    .map((entry) => ({ path: entry, text: packedContents.get(entry) }));
+  for (const { path, text } of packedMarkdown) {
+    assert.doesNotMatch(text, /opencode auth login/i, path);
+    assert.doesNotMatch(text, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/, path);
+  }
+
+  const packedExamples = packedFiles
+    .filter((entry) => /^examples\//.test(entry))
+    .map((entry) => ({ path: entry, text: packedContents.get(entry) }));
+  assert.deepEqual(packedExamples.map(({ path }) => path), ["examples/codex-mcp.toml"]);
+  for (const { path, text } of packedExamples) {
+    assert.doesNotMatch(text, /OPENCODE_CONFIG|api[_-]?key|\b(?:url|model|key|token|credential)\b/i, path);
+  }
 });
 
 test("package-lock root metadata stays in sync with package.json", () => {
@@ -157,7 +401,7 @@ test("package-lock root metadata stays in sync with package.json", () => {
   assert.deepEqual(root.dependencies, packageJson.dependencies);
 });
 
-test("docs advertise planner plus queued task lookup without claiming npm release", () => {
+test("docs advertise the two roles plus queued task lookup", () => {
   assert.match(readme, /ask_opencode_planner/);
   assert.match(readme, /get_opencode_task/);
   assert.match(readme, /codex-planning-partner/);
@@ -167,6 +411,22 @@ test("docs advertise planner plus queued task lookup without claiming npm releas
   assert.match(usageDoc, /get_opencode_task.*same public result shape/i);
   assert.match(acceptanceDoc, /manual queued-path poll/i);
   assert.match(acceptanceDoc, /completed result should preserve `advisor_text` or `planner_text`/i);
+  assert.match(readme, /opencode-advisor-setup/);
+  assert.match(usageDoc, /provider_setup_required|opencode-advisor-setup/i);
+});
+
+test("docs describe optional role-specific variants without treating them as universal provider settings", () => {
+  assert.match(readme, /reviewer `high` and planner `max`/i);
+  assert.match(installDoc, /optional reasoning variant/i);
+  assert.match(configurationDoc, /"variant": "high"/);
+  assert.match(configurationDoc, /"variant": "max"/);
+  assert.match(configurationDoc, /reasoning\.effort/);
+  assert.match(configurationDoc, /not values guaranteed by every provider or model/i);
+  assert.match(usageDoc, /--variant <role-variant>/);
+  assert.match(architectureDoc, /--variant <role-variant>/);
+  assert.match(architectureDoc, /reasoning\.effort/);
+  assert.match(acceptanceDoc, /reviewer `high` and planner `max`/i);
+  assert.match(acceptanceDoc, /reasoning\.effort/);
 });
 
 test("docs describe the current queue knobs and pending semantics", () => {
@@ -191,24 +451,38 @@ test("docs describe the current queue knobs and pending semantics", () => {
 test("docs provide a complete configuration, architecture, and compatibility reference", () => {
   for (const key of [
     "OPENCODE_ADVISOR_ALLOWED_ROOTS",
-    "OPENCODE_ADVISOR_OPENCODE_DATA_HOME",
+    "OPENCODE_ADVISOR_HOME",
     "OPENCODE_ADVISOR_OPENCODE_CMD",
     "OPENCODE_ADVISOR_TIMEOUT_MS",
     "OPENCODE_ADVISOR_GIT_TIMEOUT_MS",
     "OPENCODE_ADVISOR_MAX_DIFF_CHARS",
+    "OPENCODE_ADVISOR_REDACT_SECRETS",
     "OPENCODE_ADVISOR_SESSION_RETENTION_MS",
     "OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS",
+    "OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS",
     "OPENCODE_ADVISOR_TEST_FILE_TIMEOUT_MS",
   ]) {
     assert.match(configurationDoc, new RegExp(key));
   }
 
-  assert.match(architectureDoc, /MCP.*preflight.*Git.*Queue.*OpenCode/i);
+  assert.match(architectureDoc, /server validates allowed roots and input/i);
+  assert.match(architectureDoc, /collected Git status/i);
+  assert.match(architectureDoc, /Queue Boundary/i);
+  assert.match(architectureDoc, /opencode run --pure/i);
   assert.match(architectureDoc, /single-user/i);
+  assert.match(compatibilityDoc, /Node\.js.*>=20/i);
   assert.match(compatibilityDoc, /Windows/i);
-  assert.match(compatibilityDoc, /macOS|Linux/i);
-  assert.match(exampleConfig, /startup_timeout_sec/);
-  assert.match(exampleConfig, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/);
+  assert.match(compatibilityDoc, /CurrentUser DPAPI/i);
+  assert.match(compatibilityDoc, /macOS|Linux|POSIX/i);
+  assert.match(compatibilityDoc, /0700/);
+  assert.match(compatibilityDoc, /0600/);
+  assert.match(compatibilityDoc, /stdio MCP/i);
+  assert.match(compatibilityDoc, /OpenCode CLI/i);
+  assert.match(compatibilityDoc, /does not migrate a normal OpenCode profile/i);
+  assert.doesNotMatch(
+    compatibilityDoc,
+    /1\.17\.13|both bundled agents must be installed|install(?:ed)? .*normal OpenCode profile/i,
+  );
   assert.match(usageDoc, /\bgoal\b/i);
   assert.match(usageDoc, /base_ref/i);
   assert.match(usageDoc, /get_opencode_task/i);

@@ -1,83 +1,42 @@
 # Usage
 
-Use the reviewer when you want a second pass on the current Git state. Use the planner when you already have a direction and want OpenCode to tighten it without taking over implementation.
+Run `opencode-advisor-setup` once before asking either role. If setup is absent or unreadable, the MCP tools return `opencode_failed` with setup guidance and do not queue work.
 
-## Three-Minute Path
+## Roles And Tools
 
-1. Install both bundled agents and authenticate the dedicated advisor profile.
-2. Set `OPENCODE_ADVISOR_ALLOWED_ROOTS` and `OPENCODE_ADVISOR_OPENCODE_DATA_HOME`.
-3. Run `npm run doctor`.
-4. Ask Codex to call `ask_opencode_advisor` with a narrow `cwd`.
+- `ask_opencode_advisor`: invokes the bundled read-only `codex-advisor` reviewer.
+- `ask_opencode_planner`: invokes the bundled read-only `codex-planning-partner` planner.
+- `get_opencode_task`: reads a queued, running, completed, or expired task.
 
-If an ask returns `queued`, poll rather than submitting the same request again.
+The role set is fixed to `reviewer` and `planner`. The tool surface remains three MCP tools.
 
-## Typical Prompts
+Each OpenCode run uses `--pure`, the configured role agent, an explicit `provider/model`, and, when configured, `--variant <role-variant>`. The selected provider is the one configured by `opencode-advisor-setup`, not a normal OpenCode profile.
+
+Variants are optional and role-specific: reviewer and planner can use the same model with different choices, such as reviewer `high` and planner `max`. A blank setup answer leaves the model default in place. For a compatible `responses` provider/model, OpenCode passes the selected model variant to the Responses request as `reasoning.effort`; use only values that provider/model supports. The configured variant is profile-local and is not part of queue task JSON or MCP result fields.
+
+## Analysis Boundary
+
+The reviewer receives only the request plus the Git status and optional diff context collected for that request. The planner receives that same supplied context plus `current_plan` and `constraints` when provided. Neither role can inspect repository files, call file tools, run shell commands, launch subagents, or change project state. Their advice is therefore limited to the supplied diff, status, and plan context; add the needed paths or plan detail when context is incomplete.
+
+## Request Context
+
+Both ask tools accept optional `question` and `goal` text, a `cwd`, and repository-relative `paths`. `include_status`, `include_diff`, `base_ref`, and `max_diff_chars` control the supplied Git context; `base_ref` defaults to `HEAD`. The planner also accepts `current_plan` and `constraints`.
+
+## Typical Requests
 
 ```text
 Ask opencode_advisor to review the current changes.
+Focus on bugs, release risks, and missing tests.
 ```
 
 ```text
-Let OpenCode review this diff. Focus on risks, missing tests, privacy issues, and release readiness.
+Ask opencode_planner to improve this plan.
+Focus on sequencing, validation points, and scope control.
 ```
 
-```text
-Call ask_opencode_advisor for this repository and summarize the actionable findings.
-```
+## Results
 
-```text
-Ask opencode_planner to improve this plan. Focus on missing checks, better ordering, and scope control.
-```
-
-## What The MCP Tool Does
-
-The reviewer/planner flow:
-
-1. Validates the requested repository and paths
-2. Collects Git status and optional diff context
-3. Runs either `opencode run --agent codex-advisor` or `opencode run --agent codex-planning-partner`
-4. Returns structured JSON immediately if the task finishes inline, or returns a queued/running pending state plus `task_id`
-5. Lets you poll `get_opencode_task` until a final result is ready
-
-Role boundaries:
-
-- `ask_opencode_advisor`: reviewer only; it should not write files, execute shell commands, commit, or take over implementation
-- `ask_opencode_planner`: planning partner only; it should not decide the final plan, implement code, or expand scope on its own
-- `get_opencode_task`: task lookup for queued or running planner/reviewer jobs
-
-## Input Fields
-
-Both ask tools accept:
-
-| Field | Meaning |
-| --- | --- |
-| `cwd` | Repository working directory; it must be under an allowed root. |
-| `question` | The specific question for this review or planning pass. |
-| `goal` | The broader outcome or release objective that gives the question context. |
-| `paths` | Optional literal relative paths to constrain Git context. |
-| `include_status` / `include_diff` | Whether to include Git status/diff context. |
-| `base_ref` | Base ref for unstaged comparison; defaults to `HEAD`. For a main-relative review, pass `main`. |
-| `max_diff_chars` | Optional diff-context cap. |
-
-The planner additionally accepts `current_plan` and `constraints`. `question` is the immediate request; `goal` is the higher-level result to protect.
-
-Unstaged diffs are compared to `base_ref`; staged diffs are always compared to `HEAD`. Use `git add -A` when you want staged changes included deliberately.
-
-## Privacy And Authorization
-
-Before using this tool:
-
-- Make sure you are allowed to review and disclose the repository content involved
-- Assume your configured OpenCode runtime may use a remote model provider
-- Avoid sensitive repositories unless that provider path is approved
-- Keep `OPENCODE_ADVISOR_ALLOWED_ROOTS` narrow
-
-This tool blocks `.env` reads in the bundled advisor template, but it does not guarantee that every secret in a repository is protected from review context.
-Current builds apply a conservative best-effort secret redaction pass to diff context before it is sent to OpenCode. Treat that as a fallback safety layer, not as proof that every sensitive value is caught.
-
-## Response Shape
-
-Success responses contain stable summary fields only:
+Reviewer success fields remain:
 
 - `ok`
 - `base_ref`
@@ -86,119 +45,44 @@ Success responses contain stable summary fields only:
 - `advisor_text`
 - `opencode_exit_code`
 
-Failure responses contain:
+Planner success has the same fields with `planner_text`. Failure fields remain `ok`, `error`, `message`, and `details`. Provider profile state is not exposed in these responses.
 
-- `ok`
-- `error`
-- `message`
-- `details`
+An incomplete, interrupted, tampered, or manifest-binding-mismatched setup is treated exactly like missing setup: `opencode_failed` with setup guidance and no queued task. Rerun `opencode-advisor-setup`; do not manually patch the profile.
 
-Known error codes:
+When a task does not finish during the inline wait interval, the ask tool returns `error: "queued"` with `details.phase_pending: true` and a `task_id`. Queued/running is pending, not failed. Poll `get_opencode_task` until it returns the same public result shape. An expired queue status is not timeout; it identifies stale local queue state rather than an in-flight provider request.
 
-- `invalid_cwd`
-- `invalid_paths`
-- `git_failed`
-- `opencode_not_found`
-- `opencode_failed`
-- `timeout`
+## Queue Controls
 
-Public builds intentionally avoid echoing local absolute paths, allowed roots, resolved command paths, or raw process output in structured responses.
+Default queue limits are global `4`, planner `2`, reviewer `2`, inline wait `60000ms`, and retry hint `30000ms`.
 
-## Queued And Running Results
+Available non-secret queue controls:
 
-If the queue is busy, the ask tool may return:
-
-- `ok: false`
-- `error: "queued"`
-- `details.phase_pending: true`
-- `details.task_id`
-- `details.status` (`queued` or `running`)
-
-queued/running is pending, not failed. Keep that phase open and call `get_opencode_task` later with the returned `task_id`.
-
-Example polling flow:
-
-```json
-{ "ok": false, "error": "queued", "details": { "task_id": "ocq_example", "retry_after_ms": 30000 } }
-```
-
-Wait roughly `retry_after_ms`, then call:
-
-```text
-get_opencode_task({ "task_id": "ocq_example" })
-```
-
-When the task is finished, `get_opencode_task` returns the same public result shape you would have received inline:
-
-- reviewer results keep `advisor_text`
-- planner results keep `planner_text`
-- expired tasks stay distinct from `timeout` and generic failures
-
-Default queue policy:
-
-- global concurrency `4`
-- planner concurrency `2`
-- reviewer concurrency `2`
-- inline wait `60000ms`
-- retry hint `30000ms`
-- pending-task TTL `86400000ms`
-
-Current queue env knobs:
-
+- `OPENCODE_ADVISOR_CONCURRENCY_GLOBAL`
+- `OPENCODE_ADVISOR_CONCURRENCY_PLANNER`
+- `OPENCODE_ADVISOR_CONCURRENCY_REVIEWER`
+- `OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS`
+- `OPENCODE_ADVISOR_QUEUE_RETRY_AFTER_MS`
 - `OPENCODE_ADVISOR_QUEUE_MAX_PENDING`
 - `OPENCODE_ADVISOR_TASK_TTL_MS`
 - `OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS`
 - `OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS`
 - `OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS`
 - `OPENCODE_ADVISOR_QUEUE_POLL_MS`
+- `OPENCODE_ADVISOR_SESSION_RETENTION_MS`
+- `OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS`
+- `OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS`
 
-Queue files live under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms. On POSIX the server requests owner-only directory and file modes; queue contents remain local files and are not encrypted.
+`OPENCODE_ADVISOR_QUEUE_DIR` uses its value as the queue directory. `OPENCODE_ADVISOR_QUEUE_LOG_DIR` enables local detached-runner logs for local diagnosis. Neither location contains provider credentials or profile data.
 
-If you set `OPENCODE_ADVISOR_QUEUE_DIR`, that value is used as the queue directory directly.
-If you set `OPENCODE_ADVISOR_QUEUE_LOG_DIR`, detached runner stdout/stderr is captured there for local diagnosis.
-If a task ages out, the expired status is not timeout: it means the queued/running task is no longer recoverable and should be treated as a stale local queue record instead of an in-flight OpenCode timeout.
-If the queue directory cannot be created or written, the ask/get-task flow should return a structured queue-directory failure instead of behaving like a silent MCP disconnect.
+Maintenance removes expired terminal task files and Advisor-owned OpenCode sessions. Session cleanup uses the independent profile's isolated OpenCode environment without the provider credential.
 
-## Notes
+## Doctor
 
-- Each advisor task creates a titled OpenCode session record in the required dedicated `OPENCODE_ADVISOR_OPENCODE_DATA_HOME` profile
-- Authenticate that dedicated profile separately; the server never copies or cleans the user's normal OpenCode database or credentials
-- Managed sessions are retained for 3 days and terminal queue files for 7 days by default; low-frequency cleanup uses only OpenCode session list/delete commands in the dedicated profile
-- The model/provider behavior is controlled by your local OpenCode configuration, not by this repository
-- Current implementation is a one-shot review tool, not a persistent OpenCode server
-- Inner review timeout is controlled by `OPENCODE_ADVISOR_TIMEOUT_MS`; keep outer MCP `tool_timeout_sec` larger so Codex does not truncate the run first
-- `npm run print-agent -- planner` prints the planner template; `npm run print-agent -- codex-planning-partner` is the equivalent raw agent-name form
-
-For configuration defaults and retention behavior, see [CONFIGURATION.md](CONFIGURATION.md). For the request/queue lifecycle, see [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## Local Doctor
-
-For source installs, run the local runtime self-check from the repository root:
+After `opencode-advisor-setup`, run:
 
 ```powershell
 $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
-$env:OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-opencode-data-home>"
-npm run doctor
+opencode-advisor-doctor
 ```
 
-This doctor check is local-only. It depends on:
-
-- a working `opencode` command
-- a recent OpenCode CLI (currently validated with `1.17.13`)
-- registered `codex-advisor` and `codex-planning-partner` agents
-- a valid `OPENCODE_ADVISOR_ALLOWED_ROOTS` setting in the shell for the current repo
-
-Run it from the repository root in the same shell where `OPENCODE_ADVISOR_ALLOWED_ROOTS` is set. Doctor uses the same fallback and upstream diagnostic rules as the server, so quoted assistant text alone should not trip a fallback bucket.
-
-It is not part of the GitHub CI gate and it does not imply that an npm package has been published.
-
-## Quick Troubleshooting
-
-Use the doctor bucket as the first triage hint:
-
-- `opencode_not_found`: OpenCode is missing from PATH or `OPENCODE_ADVISOR_OPENCODE_CMD` points to the wrong command
-- `agent_missing_or_fallback`: one of the bundled agents is missing or OpenCode fell back to another agent; reinstall both bundled agent files and check `opencode agent list`
-- `invalid_cwd_or_allowed_roots`: the current repo is outside `OPENCODE_ADVISOR_ALLOWED_ROOTS`; narrow or correct that env var and rerun doctor from the repo root
-- `upstream_unavailable`: the configured OpenCode provider path is temporarily unavailable
-- `timeout`: the provider path did not answer before `OPENCODE_ADVISOR_TIMEOUT_MS`; if you raise the inner timeout, also raise outer MCP `tool_timeout_sec`
-- `generic_opencode_failure`: inspect the failing doctor step, then rerun the direct `opencode run` and local `askOpenCodeAdvisor(...)` acceptance checks
+Doctor treats a 401, timeout, agent fallback, empty output, or non-JSON OpenCode response as a failed verification. A real reviewer or planner result is usable for a release gate only when it contains the expected explicit conclusion; a fallback, timeout, 401, or empty response is not a pass.

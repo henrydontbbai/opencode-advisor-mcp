@@ -1,79 +1,45 @@
 # Releasing
 
-Use this checklist for public GitHub releases. npm publication is a future optional path and is not part of the current release flow.
+## Verify The Package
 
-## Preconditions
-
-- GitHub account security is in good standing
-- private vulnerability reporting is enabled for the repository
-- the intended release tag and `package.json` version are aligned
-
-## Verify The Tree
+From a clean source checkout:
 
 ```powershell
-npm install
+npm ci
 npm run smoke
 npm test
 npm run test:doctor
+npm run print-agent
+npm run print-agent -- planner
 npm pack --dry-run
+git diff --check
 ```
 
-Also verify:
+The tarball must include `opencode-advisor-setup`, `opencode-advisor-doctor`, the two agent templates, profile modules, and no profile or credential files.
 
-- the tarball contains only intended files
-- `npm run print-agent` prints the advisor template
-- `npm run print-agent -- planner` prints the planner template
-- a packed install works in a fresh temp directory
-- for source installs, `npm run doctor` passes from the repo root in the same shell where `OPENCODE_ADVISOR_ALLOWED_ROOTS` is set
+## Local Provider Gate
 
-## Scan For Public Release Problems
-
-Current tree:
+Use a disposable or intended local profile and configure it with `opencode-advisor-setup`. Do not reuse a normal OpenCode, Codex, or Cockpit provider profile.
 
 ```powershell
-rg -n "gho_|npm_|C:\\Users\\|/Users/|/home/" .
+$env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+npm run doctor
 ```
 
-History and tags:
+Then run one real reviewer and planner request. Each release-gate conclusion must explicitly say `BLOCKER: none`. A 401, timeout, fallback, empty result, non-JSON result, or generic doctor failure is not a pass.
 
-```powershell
-git log --all --decorate --stat --oneline
-$pattern = "gho_|npm_|C:\\Users\\|/Users/|/home/"
-git rev-list --all | ForEach-Object { git grep -n -E $pattern $_ }
-```
+Also exercise the independent-profile recovery boundary: alter a disposable manifest so its credential-manifest binding no longer matches, then alter a generated overlay so its manifest-overlay binding no longer matches. Both conditions must be rejected before a queue task is created; recover only by rerunning `opencode-advisor-setup`. A setup cancelled before profile writing may leave the prior valid profile usable. On POSIX, verify the profile remains private (`0700` directories and `0600` credential file). On Windows, a custom `OPENCODE_ADVISOR_OPENCODE_CMD` must be an existing trusted absolute `.exe`, never a shell wrapper or command string with arguments.
 
-Expected:
+When a local OpenCode executable is available, run the opt-in provider fixture described in [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md). It is the release evidence for Responses text/error/tool-event SSE handling and Chat Completions streaming. Do not enable agent tools merely to make a tool-call event pass: the two bundled agents must retain `permission: "*": deny`, leave the streamed call unexecuted, and fail closed with the expected timeout.
 
-- no secrets
-- no personal machine-path leakage intended for public history
-- no local runtime artifacts in tracked history
+## Package Scan
 
-## Review
+Verify package contents do not include:
 
-Run one final OpenCode read-only review focused on:
+- `.env` files, API keys, credential files, profile directories, queue logs, or worktrees
+- `test/`, `scripts/`, `node_modules/`, or local tarballs
+- private absolute paths or machine-specific runtime artifacts
 
-- privacy and disclosure boundaries
-- packaging contents
-- queued/running semantics staying explicit and non-destructive
-- release readiness
+## External Actions
 
-## GitHub Release
-
-1. create or update the public repository
-2. add `origin`
-3. push `main`
-4. create and push the public release tag
-5. create the GitHub Release from `CHANGELOG.md`
-
-## Future npm Release
-
-Do not run this section for the current non-npm flow. Before any future npm release, confirm account authentication, 2FA, package ownership or availability, and the exact package version.
-
-Future command shape:
-
-```powershell
-npm whoami
-npm publish --access public --provenance
-```
-
-If provenance is unavailable in the environment, use `npm publish --access public`. Publish from a clean checkout only.
+Commit, push, publish, create a release, merge pull requests, and close issues only after separate explicit authorization. This document does not grant those actions.

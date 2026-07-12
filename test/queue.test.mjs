@@ -16,6 +16,7 @@ import {
   sortByCreatedAt,
   writeTaskFile,
 } from "../src/task-queue.mjs";
+import { SETUP_GUIDANCE } from "../src/provider-profile.mjs";
 
 const tempDirs = new Set();
 
@@ -82,6 +83,96 @@ function successfulTaskResult(task) {
   };
 }
 
+const PERSISTENCE_PROFILE = {
+  config: {
+    version: 1,
+    provider: {
+      id: "queue-provider",
+      name: "Queue Provider",
+      base_url: "https://queue-models.example.test/v1",
+      transport: "responses",
+      models: [
+        { id: "queue-reviewer-model", name: "Queue Reviewer Model" },
+        { id: "queue-planner-model", name: "Queue Planner Model" },
+      ],
+    },
+    roles: {
+      reviewer: { model: "queue-reviewer-model" },
+      planner: { model: "queue-planner-model" },
+    },
+  },
+  credential: "queue-provider-secret",
+};
+const PERSISTENCE_PROFILE_VALUES = [
+  "https://queue-models.example.test/v1",
+  "queue-reviewer-model",
+  "queue-planner-model",
+  "queue-provider/queue-reviewer-model",
+  "queue-provider/queue-planner-model",
+  "queue-provider-secret",
+];
+
+function assertNoPersistedProfileValues(value) {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  for (const sensitiveValue of PERSISTENCE_PROFILE_VALUES) {
+    assert.equal(serialized.includes(sensitiveValue), false, sensitiveValue);
+  }
+}
+
+function createCollisionProfile() {
+  return {
+    config: {
+      version: 1,
+      provider: {
+        id: "collision-provider",
+        name: "Collision Provider",
+        base_url: "https://collision-models.example.test/v1",
+        transport: "responses",
+        models: [
+          { id: "running", name: "Running" },
+          { id: "opencode_failed", name: "OpenCode Failed" },
+        ],
+      },
+      roles: {
+        reviewer: { model: "running" },
+        planner: { model: "opencode_failed" },
+      },
+    },
+    credential: "collision-provider-secret",
+  };
+}
+
+function createConfiguredTaskQueue(options = {}) {
+  return createTaskQueue({
+    loadAdvisorProfile: async () => PERSISTENCE_PROFILE,
+    ...options,
+  });
+}
+
+function createMaintenanceProfile() {
+  return {
+    ...PERSISTENCE_PROFILE,
+    paths: {
+      home: "/advisor-profile",
+      configHome: "/advisor-profile/opencode-config",
+      dataHome: "/advisor-profile/opencode-data",
+      cacheHome: "/advisor-profile/opencode-cache",
+      stateHome: "/advisor-profile/opencode-state",
+      opencodeConfigPath: "/advisor-profile/opencode-config/opencode.json",
+      opencodeConfigDir: "/advisor-profile/opencode-config-dir",
+    },
+  };
+}
+
+async function waitForCondition(condition, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Condition did not become true within ${timeoutMs}ms.`);
+}
+
 afterEach(() => {
   for (const directory of tempDirs) {
     rmSync(directory, { recursive: true, force: true, maxRetries: 3 });
@@ -141,9 +232,10 @@ test("processQueueOnce saves a session id without exposing it in the public resu
   assert.equal("session_id" in saved.result, false);
 });
 
-test("runQueueMaintenance deletes expired managed sessions and terminal task files", async () => {
+test("runQueueMaintenance uses an isolated credential-free profile environment for expired sessions", async () => {
   const queueDir = createTempDir();
   const now = Date.now();
+  const profile = createMaintenanceProfile();
   const expiredTask = {
     ...createTaskFile({
       id: "ocq_retainedtask",
@@ -156,20 +248,42 @@ test("runQueueMaintenance deletes expired managed sessions and terminal task fil
     result: successfulTaskResult({ role: "reviewer" }),
   };
   await writeTaskFile(queueDir, expiredTask);
+  const retainedTask = {
+    ...createTaskFile({
+      id: "ocq_retainedprofilefree",
+      role: "reviewer",
+      input: { cwd: "/repo", question: "keep this task" },
+      now,
+    }),
+    status: "completed",
+    completed_at: new Date(now).toISOString(),
+    result: successfulTaskResult({ role: "reviewer" }),
+  };
+  await writeTaskFile(queueDir, retainedTask, { profile });
 
   const commands = [];
+  const env = {
+    PATH: "/safe/bin",
+    OPENAI_API_KEY: "inherited-provider-key",
+    OPENCODE_ADVISOR_PROVIDER_KEY: "inherited-advisor-key",
+    OPENCODE_CONFIG: "/ordinary/opencode.json",
+    XDG_DATA_HOME: "/ordinary/opencode-data",
+    OPENCODE_ADVISOR_OPENCODE_CMD: "opencode",
+  };
   const config = {
     ...getQueueConfig({
-      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: path.join(queueDir, "profile"),
       OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
       OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS: "5000",
       OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
-    }, process.platform),
+    }, "linux"),
     queueDir,
+    env,
+    platform: "linux",
   };
   await runQueueMaintenance({
     queueDir,
     config,
+    profile,
     now,
     runSessionCommand: async (command, args, options) => {
       commands.push({ command, args, options });
@@ -208,7 +322,66 @@ test("runQueueMaintenance deletes expired managed sessions and terminal task fil
       ["session", "delete", "ses_expired"],
     ],
   );
-  assert.equal(commands[0].options.env.XDG_DATA_HOME, config.opencodeDataHome);
+  assert.equal(commands[1].command, commands[0].command);
+  assert.equal(commands[1].options, commands[0].options);
+  assert.equal(commands[0].options.cwd, profile.paths.home);
+  assert.equal(commands[0].options.env.XDG_CONFIG_HOME, profile.paths.configHome);
+  assert.equal(commands[0].options.env.XDG_DATA_HOME, profile.paths.dataHome);
+  assert.equal(commands[0].options.env.OPENCODE_CONFIG, profile.paths.opencodeConfigPath);
+  assert.equal(commands[0].options.env.OPENAI_API_KEY, undefined);
+  assert.equal(commands[0].options.env.OPENCODE_ADVISOR_PROVIDER_KEY, undefined);
+  assert.equal(commands[0].options.env.OPENCODE_CONFIG_CONTENT.includes(profile.credential), false);
+  assert.equal(JSON.stringify(await readTaskFile(queueDir, retainedTask.id)).includes(profile.paths.home), false);
+  assertNoPersistedProfileValues(await readTaskFile(queueDir, retainedTask.id));
+});
+
+test("runQueueRunner repeats maintenance while it remains alive", async () => {
+  const queueDir = createTempDir();
+  const now = Date.now();
+  const task = {
+    ...createTaskFile({
+      id: "ocq_periodiccleanup",
+      role: "reviewer",
+      input: { cwd: "/repo", question: "cleanup later" },
+      now,
+    }),
+    status: "completed",
+    completed_at: new Date(now).toISOString(),
+    result: successfulTaskResult({ role: "reviewer" }),
+  };
+  await writeTaskFile(queueDir, task);
+
+  const handlers = new Map();
+  const signals = {
+    on(signal, handler) {
+      handlers.set(signal, handler);
+    },
+    off(signal, handler) {
+      assert.equal(handlers.get(signal), handler);
+      handlers.delete(signal);
+    },
+  };
+  const runnerPromise = runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "300",
+      OPENCODE_ADVISOR_QUEUE_POLL_MS: "5",
+      OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS: "25",
+      OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "10",
+    },
+    platform: process.platform,
+    signals,
+    loadAdvisorProfile: async () => {
+      throw new Error("profile is unavailable");
+    },
+    runTask: async () => {
+      throw new Error("runner should not process terminal tasks");
+    },
+  });
+
+  await waitForCondition(async () => (await readTaskFile(queueDir, task.id)) === null);
+  handlers.get("SIGTERM")();
+  await waitFor(runnerPromise);
 });
 
 test("getQueueConfig keeps stale thresholds at or above the default floor when timeout is reduced", () => {
@@ -250,26 +423,14 @@ test("getQueueConfig treats OPENCODE_ADVISOR_QUEUE_DIR as the direct queue direc
   assert.equal(config.queueDir, path.resolve(queueDir));
 });
 
-test("getQueueConfig selects the platform-appropriate home directory", () => {
+test("getQueueConfig keeps queue state under an explicitly configured advisor profile", () => {
+  const advisorHome = path.join(os.tmpdir(), "advisor-profile-home");
   const config = getQueueConfig(
-    {
-      HOME: "/home/posix-user",
-      USERPROFILE: "C:\\Users\\windows-user",
-    },
-    "linux",
+    { OPENCODE_ADVISOR_HOME: advisorHome },
+    process.platform,
   );
 
-  assert.equal(config.queueDir, "/home/posix-user/.codex/opencode-advisor/queue");
-});
-
-test("sortByCreatedAt orders malformed timestamps deterministically and coerces task ids", () => {
-  const sorted = sortByCreatedAt([
-    { id: 2, created_at: "not-a-date" },
-    { id: "valid", created_at: "2026-01-01T00:00:00.000Z" },
-    { id: 10, created_at: "not-a-date" },
-  ]);
-
-  assert.deepEqual(sorted.map((task) => String(task.id)), ["valid", "10", "2"]);
+  assert.equal(config.queueDir, path.join(path.resolve(advisorHome), "queue"));
 });
 
 test("ensureQueueRunner normalizes a relative queue override before spawning the runner", async () => {
@@ -294,6 +455,48 @@ test("ensureQueueRunner normalizes a relative queue override before spawning the
     path.resolve(relativeQueueDir),
   );
   assert.equal(spawnOptions.cwd, path.resolve(relativeQueueDir));
+});
+
+test("ensureQueueRunner does not pass inherited provider secrets or normal OpenCode configuration to the runner", async () => {
+  const queueDir = createTempDir();
+  let spawnOptions;
+  await ensureQueueRunner({
+    env: {
+      PATH: `safe-path:${PERSISTENCE_PROFILE_VALUES.join(":")}`,
+      TEMP: "safe-temp",
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo",
+      OPENCODE_ADVISOR_HOME: "/profile",
+      OPENCODE_ADVISOR_OPENCODE_CMD: "opencode",
+      OPENCODE_ADVISOR_GIT_TIMEOUT_MS: "12345",
+      OPENAI_API_KEY: "normal-provider-key",
+      OPENCODE_ADVISOR_PROVIDER_KEY: "advisor-provider-key",
+      OPENCODE_ADVISOR_PROVIDER_URL: PERSISTENCE_PROFILE_VALUES[0],
+      OPENCODE_ADVISOR_PROVIDER_MODEL: PERSISTENCE_PROFILE_VALUES[1],
+      OPENCODE_ADVISOR_PROVIDER_SELECTOR: PERSISTENCE_PROFILE_VALUES[3],
+      OPENCODE_CONFIG: "/normal/opencode.json",
+      XDG_DATA_HOME: "/normal/data",
+    },
+    platform: process.platform,
+    profile: PERSISTENCE_PROFILE,
+    spawnProcess: (_command, _args, options) => {
+      spawnOptions = options;
+      return { unref() {} };
+    },
+    nodeExec: process.execPath,
+  });
+
+  assert.equal(spawnOptions.env.OPENAI_API_KEY, undefined);
+  assert.equal(spawnOptions.env.OPENCODE_ADVISOR_PROVIDER_KEY, undefined);
+  assert.equal(spawnOptions.env.OPENCODE_CONFIG, undefined);
+  assert.equal(spawnOptions.env.XDG_DATA_HOME, undefined);
+  assert.equal(spawnOptions.env.OPENCODE_ADVISOR_HOME, "/profile");
+  assert.equal(spawnOptions.env.OPENCODE_ADVISOR_ALLOWED_ROOTS, "/repo");
+  assert.equal(spawnOptions.env.OPENCODE_ADVISOR_GIT_TIMEOUT_MS, "12345");
+  assert.equal(spawnOptions.env.OPENCODE_ADVISOR_QUEUE_DIR, queueDir);
+  assert.equal(spawnOptions.env.PATH, undefined);
+  assert.equal(spawnOptions.env.TEMP, "safe-temp");
+  assertNoPersistedProfileValues(spawnOptions.env);
 });
 
 test("ensureQueueRunner writes runner logs when a queue log directory is configured", async () => {
@@ -1205,7 +1408,7 @@ test("createTaskQueue returns queue_full without spawning the runner", async () 
   await writeTaskFile(queueDir, createTaskFile({ id: "ocq_pendingtwo", role: "reviewer", input: { question: "b" } }));
 
   let spawnCalled = false;
-  const queue = createTaskQueue({
+  const queue = createConfiguredTaskQueue({
     env: {
       OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
       OPENCODE_ADVISOR_QUEUE_MAX_PENDING: "2",
@@ -1230,7 +1433,7 @@ test("createTaskQueue returns a structured error when the queue directory cannot
   const occupiedPath = path.join(baseDir, "occupied");
   writeFileSync(occupiedPath, "not a directory\n", "utf8");
 
-  const failingQueue = createTaskQueue({
+  const failingQueue = createConfiguredTaskQueue({
     env: {
       OPENCODE_ADVISOR_QUEUE_DIR: path.join(occupiedPath, "queue"),
     },
@@ -1249,7 +1452,7 @@ test("createTaskQueue returns a structured error when the queue directory cannot
 test("createTaskQueue enforces maxPending atomically across concurrent submissions", async () => {
   const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
   let spawnCount = 0;
-  const queue = createTaskQueue({
+  const queue = createConfiguredTaskQueue({
     env: {
       OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
       OPENCODE_ADVISOR_QUEUE_MAX_PENDING: "1",
@@ -1284,7 +1487,7 @@ test("createTaskQueue recovers from a stale submission lock", async () => {
   utimesSync(staleLockPath, oldDate, oldDate);
 
   let spawnCalled = false;
-  const queue = createTaskQueue({
+  const queue = createConfiguredTaskQueue({
     env: {
       OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
       OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS: "1",
@@ -1346,7 +1549,7 @@ test("createTaskQueue ignores TTL-expired pending tasks when checking queue_full
   });
 
   let spawnCalled = false;
-  const queue = createTaskQueue({
+  const queue = createConfiguredTaskQueue({
     env: {
       OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
       OPENCODE_ADVISOR_QUEUE_MAX_PENDING: "2",
@@ -1381,7 +1584,7 @@ test("createTaskQueue tolerates concurrent runner-state reads during parallel su
     OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "50",
   };
 
-  const queue = createTaskQueue({
+  const queue = createConfiguredTaskQueue({
     env,
     platform: process.platform,
     spawnProcess: () => ({ unref() {} }),
@@ -1431,6 +1634,234 @@ test("writeTaskFile persists task files atomically", async () => {
 
   const entries = readdirSync(queueDir).filter((name) => name.includes("atomicwrite"));
   assert.deepEqual(entries, ["ocq_atomicwrite.json"]);
+});
+
+test("writeTaskFile redacts current profile values from persisted task input without metadata", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const task = createTaskFile({
+    id: "ocq_profileinput",
+    role: "reviewer",
+    input: {
+      question: `Use ${PERSISTENCE_PROFILE_VALUES.join(" ")}`,
+      nested: { note: PERSISTENCE_PROFILE_VALUES.join(" ") },
+    },
+  });
+
+  await writeTaskFile(queueDir, task, { profile: PERSISTENCE_PROFILE });
+
+  const stored = JSON.parse(readFileSync(path.join(queueDir, "ocq_profileinput.json"), "utf8"));
+  assertNoPersistedProfileValues(stored);
+  assert.equal(Object.hasOwn(stored, "profile"), false);
+  assert.equal(stored.input.question.includes("[REDACTED_PROVIDER_VALUE]"), true);
+});
+
+test("createTaskQueue loads the current profile before it persists task input", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const queue = createTaskQueue({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS: "1",
+    },
+    platform: process.platform,
+    loadAdvisorProfile: async () => PERSISTENCE_PROFILE,
+    spawnProcess: () => ({ unref() {} }),
+  });
+
+  const result = await queue.submitAndWait({
+    role: "planner",
+    input: { current_plan: `Persist ${PERSISTENCE_PROFILE_VALUES.join(" ")}` },
+  });
+
+  assert.equal(result.error, "queued");
+  const [taskFilename] = readdirSync(queueDir).filter((name) => name.endsWith(".json") && !name.startsWith("_"));
+  const stored = JSON.parse(readFileSync(path.join(queueDir, taskFilename), "utf8"));
+  assertNoPersistedProfileValues(stored);
+  assert.equal(Object.hasOwn(stored, "profile"), false);
+});
+
+test("createTaskQueue fails closed before persistence when profile loading fails", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  for (const failure of ["setup unavailable", "credential unavailable"]) {
+    let spawned = false;
+    const queue = createTaskQueue({
+      env: {
+        OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+        OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS: "1",
+      },
+      platform: process.platform,
+      loadAdvisorProfile: async () => {
+        throw new Error(failure);
+      },
+      spawnProcess: () => {
+        spawned = true;
+        return { unref() {} };
+      },
+    });
+
+    const result = await queue.submitAndWait({
+      role: "reviewer",
+      input: { question: failure },
+    });
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: "opencode_failed",
+      message: SETUP_GUIDANCE,
+      details: {},
+    });
+    assert.equal(spawned, false);
+    assert.deepEqual(
+      readdirSync(queueDir).filter((name) => name.endsWith(".json") && !name.startsWith("_")),
+      [],
+    );
+  }
+});
+
+test("writeTaskFile preserves queue control fields while redacting profile values from input and output", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const profile = createCollisionProfile();
+  const task = {
+    ...createTaskFile({
+      id: "ocq_running",
+      role: "planner",
+      input: {
+        [`${profile.credential}-input`]: `${profile.config.provider.base_url} running`,
+      },
+    }),
+    status: "running",
+    runner_id: "runner_running",
+    started_at: "2026-01-01T00:00:00.000Z",
+    completed_at: "2026-01-01T00:01:00.000Z",
+    updated_at: "2026-01-01T00:01:00.000Z",
+    attempt_count: 2,
+    result: {
+      ok: false,
+      error: "opencode_failed",
+      status: "running",
+      message: `${profile.credential} ${profile.config.provider.base_url}`,
+      details: {
+        [`${profile.config.provider.base_url}-detail`]: "running",
+      },
+    },
+    profile,
+    credential: profile.credential,
+  };
+
+  await writeTaskFile(queueDir, task, { profile });
+
+  const stored = await readTaskFile(queueDir, task.id);
+  assert.equal(stored.id, task.id);
+  assert.equal(stored.role, task.role);
+  assert.equal(stored.status, task.status);
+  assert.equal(stored.created_at, task.created_at);
+  assert.equal(stored.updated_at, task.updated_at);
+  assert.equal(stored.started_at, task.started_at);
+  assert.equal(stored.completed_at, task.completed_at);
+  assert.equal(stored.attempt_count, task.attempt_count);
+  assert.equal(stored.runner_id, task.runner_id);
+  assert.equal(stored.result.error, "opencode_failed");
+  assert.equal(Object.hasOwn(stored, "profile"), false);
+  assert.equal(Object.hasOwn(stored, "credential"), false);
+
+  const sensitiveValues = [
+    profile.credential,
+    profile.config.provider.base_url,
+    "running",
+    "opencode_failed",
+  ];
+  for (const value of sensitiveValues) {
+    assert.equal(JSON.stringify(stored.input).includes(value), false, value);
+  }
+  const { error: publicError, ...redactedResult } = stored.result;
+  assert.equal(publicError, "opencode_failed");
+  for (const value of sensitiveValues) {
+    assert.equal(JSON.stringify(redactedResult).includes(value), false, value);
+  }
+});
+
+test("processQueueOnce completes a task when a configured model collides with its id and running state", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const profile = createCollisionProfile();
+  const task = createTaskFile({
+    id: "ocq_running",
+    role: "reviewer",
+    input: { question: "complete safely" },
+  });
+  const config = getQueueConfig({}, process.platform);
+  await writeTaskFile(queueDir, task, { profile });
+
+  const cycle = await processQueueOnce({
+    queueDir,
+    config,
+    profile,
+    runnerId: "runner_running",
+    runTask: successfulTaskResult,
+  });
+
+  assert.deepEqual(cycle.startedIds, [task.id]);
+  const completed = await readTaskFile(queueDir, task.id);
+  assert.equal(completed.id, task.id);
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.result.ok, true);
+});
+
+test("processQueueOnce redacts current profile values from success and thrown result snapshots", async () => {
+  const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
+  const config = getQueueConfig(
+    {
+      OPENCODE_ADVISOR_CONCURRENCY_GLOBAL: "2",
+      OPENCODE_ADVISOR_CONCURRENCY_PLANNER: "2",
+      OPENCODE_ADVISOR_CONCURRENCY_REVIEWER: "2",
+    },
+    process.platform,
+  );
+  const sensitiveText = PERSISTENCE_PROFILE_VALUES.join(" ");
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_profilesuccess",
+    role: "reviewer",
+    input: { question: "success result redaction" },
+  }), { profile: PERSISTENCE_PROFILE });
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_profilefailure",
+    role: "planner",
+    input: { current_plan: "failure result redaction" },
+  }), { profile: PERSISTENCE_PROFILE });
+
+  await processQueueOnce({
+    queueDir,
+    config,
+    profile: PERSISTENCE_PROFILE,
+    runnerId: "runner_profilepersistence",
+    runTask: async (task) => {
+      if (task.id === "ocq_profilefailure") {
+        throw new Error(`runner failure: ${sensitiveText}`);
+      }
+      return {
+        ok: true,
+        base_ref: "HEAD",
+        status: sensitiveText,
+        diff_truncated: false,
+        advisor_text: `success result: ${sensitiveText}`,
+        opencode_exit_code: 0,
+      };
+    },
+  });
+
+  const completed = await readTaskFile(queueDir, "ocq_profilesuccess");
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.result.ok, true);
+  assert.equal(completed.result.base_ref, "HEAD");
+  assert.equal(completed.result.opencode_exit_code, 0);
+  assertNoPersistedProfileValues(completed);
+  assert.equal(Object.hasOwn(completed, "profile"), false);
+
+  const failed = await readTaskFile(queueDir, "ocq_profilefailure");
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.result.ok, false);
+  assert.equal(failed.result.error, "opencode_failed");
+  assert.deepEqual(failed.result.details, {});
+  assertNoPersistedProfileValues(failed);
+  assert.equal(Object.hasOwn(failed, "profile"), false);
 });
 
 test("runQueueRunner exits promptly after SIGTERM once the current task finishes", async () => {

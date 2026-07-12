@@ -9,6 +9,10 @@ const TEST_FILES = [
   "test/mcp-integration.test.mjs",
   "test/queue-integration.test.mjs",
   "test/bin.test.mjs",
+  "test/provider-credentials.test.mjs",
+  "test/provider-profile.test.mjs",
+  "test/provider-runtime.test.mjs",
+  "test/setup-cli.test.mjs",
 ];
 
 const DEFAULT_TIMEOUT_MS = 120000;

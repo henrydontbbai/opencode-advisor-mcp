@@ -6,7 +6,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   extractOpenCodeText,
-  getOpenCodeDataHome,
   isPathInsideAllowedRoots,
   parseAllowedRoots,
   preflightOpenCodeTask,
@@ -15,6 +14,7 @@ import {
   truncateText,
 } from "./opencode-core.mjs";
 import { createTaskQueue } from "./task-queue.mjs";
+import { redactAdvisorProviderValue } from "./provider-profile.mjs";
 import { pathForPlatform, resolveOpencodeCommand } from "./runtime-shared.mjs";
 
 const packageMetadata = JSON.parse(
@@ -47,7 +47,7 @@ export async function askOpenCodeAdvisor(input = {}, deps = {}) {
 
   return getTaskQueue(deps).submitAndWait({
     role: "reviewer",
-    input: { ...input, cwd: preflight.normalized.cwd },
+    input: redactAdvisorProviderValue({ ...input, cwd: preflight.normalized.cwd }, preflight.normalized.profile),
   });
 }
 
@@ -63,7 +63,7 @@ export async function askOpenCodePlanner(input = {}, deps = {}) {
 
   return getTaskQueue(deps).submitAndWait({
     role: "planner",
-    input: { ...input, cwd: preflight.normalized.cwd },
+    input: redactAdvisorProviderValue({ ...input, cwd: preflight.normalized.cwd }, preflight.normalized.profile),
   });
 }
 
@@ -90,7 +90,6 @@ export function createServer(deps = {}) {
   if (allowedRoots.length === 0) {
     throw new Error("OPENCODE_ADVISOR_ALLOWED_ROOTS must be configured before the MCP server starts.");
   }
-  getOpenCodeDataHome(env, pathApi);
   resolveOpencodeCommand(env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", {
     env,
     platform,

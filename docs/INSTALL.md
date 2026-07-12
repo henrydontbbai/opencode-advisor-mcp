@@ -1,156 +1,86 @@
-# Install And Sync
-
-This project currently supports one public install mode:
-
-1. source checkout from GitHub
-
-Use placeholders consistently:
-
-- `<agent-dir>`: OpenCode agents directory
-- `<allowed-root>`: repo or small parent directory you explicitly allow
-- `<codex-config>`: Codex config file
-- `<repo-root>`: this source checkout
-- `<runtime-dir>`: optional local runtime directory for source installs
+# Install
 
 ## Prerequisites
 
-From a terminal:
+- Node.js `>=20`
+- A local `opencode` executable on `PATH`, or `OPENCODE_ADVISOR_OPENCODE_CMD` pointing to one
+- An MCP client that can start a stdio command
+
+The provider does not need an OpenCode account or a normal-profile login session. On Windows, a custom `OPENCODE_ADVISOR_OPENCODE_CMD` must be an existing absolute `.exe` from a location you trust; it cannot be a `.cmd` / `.bat` wrapper or an executable-plus-arguments string.
+
+## Package Install
+
+For a source checkout:
 
 ```powershell
-node --version
-npm --version
-opencode --version
-codex --version
+npm ci
+npm run setup
 ```
 
-Each command should print a version or help output.
-
-Current docs and tests are validated against OpenCode CLI `1.17.13`.
-
-## Source Install
-
-From `<repo-root>`:
+Before publication, install a local packed tarball:
 
 ```powershell
-npm install
-npm run smoke
-npm test
-npm run test:doctor
+npm install -g <path-to-opencode-advisor-mcp.tgz>
+opencode-advisor-setup
 ```
 
-```bash
-npm install
-npm run smoke
-npm test
-npm run test:doctor
-```
-
-Create the agent files:
+After publication, a registry installation can use:
 
 ```powershell
-New-Item -ItemType Directory -Force -Path <agent-dir>
-Copy-Item -LiteralPath ".\agents\codex-advisor.md" -Destination "<agent-dir>\codex-advisor.md" -Force
-Copy-Item -LiteralPath ".\agents\codex-planning-partner.md" -Destination "<agent-dir>\codex-planning-partner.md" -Force
+npm install -g opencode-advisor-mcp
+opencode-advisor-setup
 ```
 
-```bash
-mkdir -p <agent-dir>
-cp ./agents/codex-advisor.md <agent-dir>/codex-advisor.md
-cp ./agents/codex-planning-partner.md <agent-dir>/codex-planning-partner.md
-```
+The setup command is intentionally not the MCP server command. It prompts interactively for the independent third-party provider configuration and hidden API key. It accepts no configuration arguments and no piped key input. It copies `codex-advisor.md` and `codex-planning-partner.md` into the independent profile. It does not read normal OpenCode, Codex, or Cockpit provider configuration or credentials.
 
-Add this MCP block to `<codex-config>`:
+During setup, select one transport:
+
+- `responses`: `@ai-sdk/openai`, OpenAI-compatible Responses API with OpenCode-managed streaming SSE support
+- `chat_completions`: `@ai-sdk/openai-compatible`, OpenAI-compatible Chat Completions API with streaming support
+
+Select one configured model for `reviewer` and one for `planner`; they may be the same. Setup then asks for an optional reasoning variant for each role. The choices are independent, so reviewer `high` and planner `max` can share one model. Leave either variant empty to use that model's default, and only select a value supported by the chosen provider/model. No other role is configured.
+
+For a compatible `responses` provider/model, a selected role variant becomes an OpenCode model variant and reaches the API request as `reasoning.effort`. The example names `high` and `max` are not guaranteed to be accepted by every provider or model.
+
+If profile writing leaves incomplete artifacts or a binding mismatch, do not repair individual manifest, overlay, or credential files. The next MCP call fails closed with setup guidance until you rerun `opencode-advisor-setup` successfully. If setup ends before profile writing begins, a prior valid profile remains usable.
+
+## Codex MCP Entry
+
+Use [examples/codex-mcp.toml](../examples/codex-mcp.toml) for a globally installed tarball or published package:
 
 ```toml
 [mcp_servers.opencode_advisor]
-command = "node"
-args = ["<repo-root>\\src\\server.mjs"]
-# macOS/Linux: args = ["/absolute/path/to/opencode-advisor-mcp/src/server.mjs"]
+command = "opencode-advisor-mcp"
 startup_timeout_sec = 30
 tool_timeout_sec = 420
 
 [mcp_servers.opencode_advisor.env]
-OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root-or-semicolon-list>"
-OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-opencode-data-home>"
-OPENCODE_ADVISOR_TIMEOUT_MS = "300000"
-OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
-# Optional: only an absolute executable path is accepted.
-# OPENCODE_ADVISOR_OPENCODE_CMD = "C:\\Program Files\\OpenCode\\opencode.exe"
+OPENCODE_ADVISOR_ALLOWED_ROOTS = "C:\\workspace\\allowed-repositories"
 ```
 
-`OPENCODE_ADVISOR_ALLOWED_ROOTS` is required. The MCP server now fails fast at startup if it is missing or empty.
+For a source checkout, call Node with the absolute server path:
 
-`OPENCODE_ADVISOR_ALLOWED_ROOTS` accepts a semicolon-separated list. If a Windows path itself contains a semicolon, wrap that one path in double quotes, for example `"C:\workspace\team;alpha";C:\workspace\other`.
+```toml
+[mcp_servers.opencode_advisor]
+command = "node"
+args = ["C:\\absolute\\path\\to\\opencode-advisor-mcp\\src\\server.mjs"]
+```
 
-`OPENCODE_ADVISOR_OPENCODE_DATA_HOME` is required. Set it to a new absolute directory reserved for this MCP server, such as `%USERPROFILE%\.codex\opencode-advisor\opencode-data` on Windows or `$HOME/.codex/opencode-advisor/opencode-data` elsewhere. In a shell with `XDG_DATA_HOME` set to that same directory, run `opencode auth login` before using the MCP server. Do not copy your regular OpenCode profile, `opencode.db`, WAL files, or credentials into the directory; the server intentionally keeps its session storage separate.
+Do not use the setup CLI as the stdio MCP command.
 
-`OPENCODE_ADVISOR_OPENCODE_CMD` is optional. Leave it unset to launch `opencode` from `PATH`; on Windows, existing global-install locations are attempted only after the `PATH` launch fails. An override must be an existing absolute executable path, and an `.exe` on Windows, not a shell command or argument string.
+Keep `OPENCODE_ADVISOR_ALLOWED_ROOTS` narrow. It accepts a semicolon-separated list. A Windows path containing a semicolon must be quoted, for example `"C:\workspace\team;alpha";C:\workspace\other`.
 
-`startup_timeout_sec` only controls MCP connection establishment. Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or the outer MCP tool will time out before the inner OpenCode run finishes.
+The MCP configuration must not contain provider URL, provider key, model, token, or secret settings. Those values only live in the independent profile written by `opencode-advisor-setup`.
 
+## Validate
 
-Queue files are stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows or `$HOME/.codex/opencode-advisor/queue` on other platforms.
-If the queue directory cannot be created or written, the MCP tool now returns a structured failure instead of looking like a dropped connection.
-
-Advisor task sessions stay in the dedicated profile. The server retains them for 3 days by default, retains terminal queue task files for 7 days, and performs cleanup at most once per 6 hours. It invokes only OpenCode's session list/delete commands against the dedicated profile and never performs automatic SQLite compaction.
-
-From `<repo-root>`, set allowed roots in the same shell and then run the local doctor check. This terminal command does not inherit MCP env from your Codex config file.
+Run the non-MCP doctor after setup from a shell with the same allowed-root policy:
 
 ```powershell
 $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
-$env:OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-opencode-data-home>"
-npm run doctor
+opencode-advisor-doctor
 ```
 
-```bash
-export OPENCODE_ADVISOR_ALLOWED_ROOTS="<allowed-root>"
-export OPENCODE_ADVISOR_OPENCODE_DATA_HOME="<dedicated-opencode-data-home>"
-npm run doctor
-```
+From a source checkout, `npm run doctor` runs the same command. A `provider_setup_required` result means setup is absent, damaged, interrupted, has a stale manifest/overlay binding, or the stored credential cannot be decrypted; rerun setup. A `provider_authentication_failed` result means the third-party provider rejected its configured credential.
 
-Expected:
-
-- the direct `codex-advisor` agent check passes
-- the direct `codex-planning-partner` agent check passes
-- the local `askOpenCodeAdvisor({ include_diff:false, include_status:false })` health check passes
-- the summary does not report forbidden fields such as `cwd` or stderr tails
-
-## npm Package Status
-
-The package metadata and CLI entrypoints are present so package shape can be tested locally, but `opencode-advisor-mcp` has not been published to npm yet. Use the source install path above until a future npm release is announced.
-
-## Runtime Sync For Development
-
-If you keep a separate local runtime copy, sync these files:
-
-```powershell
-Copy-Item -LiteralPath "<repo-root>\src\server.mjs" -Destination "<runtime-dir>\server.mjs" -Force
-Copy-Item -LiteralPath "<repo-root>\package.json" -Destination "<runtime-dir>\package.json" -Force
-Copy-Item -LiteralPath "<repo-root>\package-lock.json" -Destination "<runtime-dir>\package-lock.json" -Force
-Copy-Item -LiteralPath "<repo-root>\agents\codex-advisor.md" -Destination "<agent-dir>\codex-advisor.md" -Force
-Copy-Item -LiteralPath "<repo-root>\agents\codex-planning-partner.md" -Destination "<agent-dir>\codex-planning-partner.md" -Force
-npm install --prefix <runtime-dir>
-```
-
-## Privacy And Scope Notes
-
-- Only set `OPENCODE_ADVISOR_ALLOWED_ROOTS` to directories you are willing to expose to the configured OpenCode runtime.
-- Do not point it at broad parent directories by default.
-- Diff context now goes through a conservative best-effort secret redaction pass before it is sent to OpenCode, but that does not replace your own repository hygiene or disclosure judgment.
-- The bundled advisor blocks writes and denies `.env` reads, but that does not replace repository-level access control.
-
-For every variable, default, unit, and adjustment guideline, see [CONFIGURATION.md](CONFIGURATION.md). For supported platforms, see [COMPATIBILITY.md](COMPATIBILITY.md).
-
-## Common Failures
-
-- `invalid_cwd`: the requested repo is outside `OPENCODE_ADVISOR_ALLOWED_ROOTS`
-- `opencode_not_found`: `opencode` is missing from PATH or `OPENCODE_ADVISOR_OPENCODE_CMD` is wrong
-- `opencode_failed`: the required OpenCode agent is missing or the OpenCode run failed
-- MCP tool missing in Codex: reload or restart Codex after config changes
-
-If `npm run doctor` fails, use its bucket as the first triage hint:
-
-- `agent_missing_or_fallback`: reinstall `agents/codex-advisor.md` and `agents/codex-planning-partner.md`, then confirm `opencode agent list`
-- `invalid_cwd_or_allowed_roots`: narrow or correct `OPENCODE_ADVISOR_ALLOWED_ROOTS`, then rerun doctor from `<repo-root>`
-- `upstream_unavailable`: your configured OpenCode provider path is temporarily unavailable
-- `timeout`: rerun or increase `OPENCODE_ADVISOR_TIMEOUT_MS`, and keep `tool_timeout_sec` higher than the inner timeout
+See [CONFIGURATION.md](CONFIGURATION.md) for profile location and runtime knobs.

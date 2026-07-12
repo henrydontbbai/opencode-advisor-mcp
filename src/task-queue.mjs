@@ -5,7 +5,20 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runProcess } from "./opencode-core.mjs";
-import { DEFAULT_TIMEOUT_MS, pathForPlatform, positiveNumber, resolveOpencodeCommand } from "./runtime-shared.mjs";
+import {
+  buildOpenCodeChildEnv,
+  loadAdvisorProfile as loadAdvisorProfileFromDisk,
+  redactAdvisorProviderText,
+  redactAdvisorProviderValue,
+  SETUP_GUIDANCE,
+} from "./provider-profile.mjs";
+import {
+  DEFAULT_TIMEOUT_MS,
+  isProcessLaunchError,
+  pathForPlatform,
+  positiveNumber,
+  resolveOpencodeCommands,
+} from "./runtime-shared.mjs";
 
 const QUEUE_PENDING_MESSAGE =
   "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.";
@@ -25,6 +38,59 @@ const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "expired", "timeo
 const SESSION_TITLE_PREFIX = "opencode-advisor:";
 const MAX_CONSECUTIVE_RUNNER_ERRORS = 3;
 const RUNNER_TERMINATION_WAIT_MS = 5000;
+const RUNNER_PLATFORM_ENVIRONMENT_NAMES = new Set([
+  "PATH",
+  "Path",
+  "HOME",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "SystemRoot",
+  "SYSTEMROOT",
+  "ComSpec",
+  "COMSPEC",
+  "PATHEXT",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+]);
+const RUNNER_ADVISOR_ENVIRONMENT_NAMES = new Set([
+  "OPENCODE_ADVISOR_ALLOWED_ROOTS",
+  "OPENCODE_ADVISOR_HOME",
+  "OPENCODE_ADVISOR_OPENCODE_CMD",
+  "OPENCODE_ADVISOR_TIMEOUT_MS",
+  "OPENCODE_ADVISOR_GIT_TIMEOUT_MS",
+  "OPENCODE_ADVISOR_MAX_DIFF_CHARS",
+  "OPENCODE_ADVISOR_REDACT_SECRETS",
+  "OPENCODE_ADVISOR_CONCURRENCY_GLOBAL",
+  "OPENCODE_ADVISOR_CONCURRENCY_PLANNER",
+  "OPENCODE_ADVISOR_CONCURRENCY_REVIEWER",
+  "OPENCODE_ADVISOR_QUEUE_DIR",
+  "OPENCODE_ADVISOR_QUEUE_LOG_DIR",
+  "OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS",
+  "OPENCODE_ADVISOR_QUEUE_RETRY_AFTER_MS",
+  "OPENCODE_ADVISOR_QUEUE_MAX_PENDING",
+  "OPENCODE_ADVISOR_TASK_TTL_MS",
+  "OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS",
+  "OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS",
+  "OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS",
+  "OPENCODE_ADVISOR_QUEUE_POLL_MS",
+  "OPENCODE_ADVISOR_SESSION_RETENTION_MS",
+  "OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS",
+  "OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS",
+]);
+const TASK_RESULT_PROTOCOL_KEYS = new Set([
+  "ok",
+  "error",
+  "message",
+  "details",
+  "base_ref",
+  "status",
+  "diff_truncated",
+  "advisor_text",
+  "planner_text",
+  "opencode_exit_code",
+]);
 
 class QueueReadRetryError extends Error {
   constructor(filePath, cause) {
@@ -121,6 +187,10 @@ function getDefaultQueueDir(env = process.env, platform = process.platform) {
     return pathApi.resolve(env.OPENCODE_ADVISOR_QUEUE_DIR);
   }
 
+  if (typeof env.OPENCODE_ADVISOR_HOME === "string" && env.OPENCODE_ADVISOR_HOME.trim()) {
+    return pathApi.join(pathApi.resolve(env.OPENCODE_ADVISOR_HOME.trim()), "queue");
+  }
+
   const home =
     (platform === "win32"
       ? env.USERPROFILE || env.HOME
@@ -136,6 +206,94 @@ function getQueueLogDir(env = process.env, platform = process.platform) {
     return null;
   }
   return pathForPlatform(platform).resolve(configured);
+}
+
+function buildQueueRunnerEnv(env, queueDir, profile) {
+  const runnerEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (
+      (RUNNER_PLATFORM_ENVIRONMENT_NAMES.has(name)
+      || RUNNER_ADVISOR_ENVIRONMENT_NAMES.has(name))
+      && typeof value === "string"
+      && value
+      && (!profile || !redactAdvisorProviderText(value, profile).includes("[REDACTED_PROVIDER_VALUE]"))
+    ) {
+      runnerEnv[name] = value;
+    }
+  }
+  runnerEnv.OPENCODE_ADVISOR_QUEUE_DIR = queueDir;
+  return runnerEnv;
+}
+
+function isFixedQueueDetail(key, value) {
+  if (key === "task_id") return isValidTaskId(value);
+  if (key === "status") {
+    return ["queued", "running", "expired", "queue_full", "invalid_task_id"].includes(value);
+  }
+  if (key === "phase_pending") return typeof value === "boolean";
+  return ["retry_after_ms", "position", "limit_global", "limit_role", "max_pending"].includes(key)
+    && typeof value === "number";
+}
+
+function redactTaskResultDetails(details, profile) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return redactAdvisorProviderValue(details, profile);
+  }
+
+  return Object.fromEntries(Object.entries(details).map(([key, value]) => {
+    if (isFixedQueueDetail(key, value)) {
+      return [key, value];
+    }
+    return [
+      redactAdvisorProviderText(key, profile),
+      redactAdvisorProviderValue(value, profile),
+    ];
+  }));
+}
+
+function redactTaskResult(result, profile) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return redactAdvisorProviderValue(result, profile);
+  }
+
+  return Object.fromEntries(Object.entries(result).map(([key, value]) => {
+    const protocolKey = TASK_RESULT_PROTOCOL_KEYS.has(key);
+    if (key === "error") {
+      return [key, value];
+    }
+    return [
+      protocolKey ? key : redactAdvisorProviderText(key, profile),
+      key === "details"
+        ? redactTaskResultDetails(value, profile)
+        : redactAdvisorProviderValue(value, profile),
+    ];
+  }));
+}
+
+function redactTaskForPersistence(task, profile) {
+  const {
+    profile: ignoredProfile,
+    credential: ignoredCredential,
+    input,
+    result,
+    ...queueMetadata
+  } = task;
+  const persisted = { ...queueMetadata };
+  if (Object.hasOwn(task, "input")) {
+    persisted.input = profile ? redactAdvisorProviderValue(input, profile) : input;
+  }
+  if (Object.hasOwn(task, "result")) {
+    persisted.result = profile ? redactTaskResult(result, profile) : result;
+  }
+  return persisted;
+}
+
+async function loadPersistenceProfile(loadProfile, env, platform) {
+  try {
+    return await loadProfile({ env, platform });
+  } catch {
+    return null;
+  }
 }
 
 function roleLimit(role, config) {
@@ -229,6 +387,15 @@ function createQueueDirUnavailableResponse() {
     ok: false,
     error: "opencode_failed",
     message: "OpenCode task queue directory is unavailable.",
+    details: {},
+  };
+}
+
+function createSetupRequiredResponse() {
+  return {
+    ok: false,
+    error: "opencode_failed",
+    message: SETUP_GUIDANCE,
     details: {},
   };
 }
@@ -334,19 +501,19 @@ async function withRunnerReleaseLock(queueDir, fn) {
   return withFileLock(queueDir, `${RUNNER_RELEASE_PREFIX}lock`, fn);
 }
 
-async function submitTaskAtomically(queueDir, task, config) {
+async function submitTaskAtomically(queueDir, task, config, profile) {
   await ensureQueueDir(queueDir);
   return withSubmissionLock(queueDir, async () => {
     const now = Date.now();
     const tasks = await listTaskFiles(queueDir);
-    await recoverOrExpireTasks(queueDir, tasks, config, now);
+    await recoverOrExpireTasks(queueDir, tasks, config, now, profile);
     const refreshedTasks = await listTaskFiles(queueDir);
     const pendingCount = refreshedTasks.filter((entry) => entry.status === "queued" || entry.status === "running").length;
     if (pendingCount >= config.maxPending) {
       return { ok: false, result: createQueueFullResponse(config) };
     }
 
-    await writeTaskFile(queueDir, task);
+    await writeTaskFile(queueDir, task, { profile });
     return { ok: true };
   });
 }
@@ -591,7 +758,7 @@ async function delay(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function recoverOrExpireTasks(queueDir, tasks, config, now) {
+async function recoverOrExpireTasks(queueDir, tasks, config, now, profile) {
   let runnerState;
   let runnerStateUnreadable = false;
   try {
@@ -621,7 +788,7 @@ async function recoverOrExpireTasks(queueDir, tasks, config, now) {
       task.result = task.result ?? createExpiredResponse(task.id);
       delete task.runner_id;
       delete task.started_at;
-      await writeTaskFile(queueDir, task);
+      await writeTaskFile(queueDir, task, { profile });
       continue;
     }
 
@@ -630,13 +797,13 @@ async function recoverOrExpireTasks(queueDir, tasks, config, now) {
       task.updated_at = isoFrom(now);
       delete task.runner_id;
       delete task.started_at;
-      await writeTaskFile(queueDir, task);
+      await writeTaskFile(queueDir, task, { profile });
       continue;
     }
   }
 }
 
-async function claimTask(queueDir, taskId, runnerId, now) {
+async function claimTask(queueDir, taskId, runnerId, now, profile) {
   return withSubmissionLock(queueDir, async () => {
     const task = await readTaskFile(queueDir, taskId);
     if (!task || task.status !== "queued") {
@@ -648,12 +815,12 @@ async function claimTask(queueDir, taskId, runnerId, now) {
     task.started_at = isoFrom(now);
     task.updated_at = isoFrom(now);
     task.attempt_count = Number(task.attempt_count || 0) + 1;
-    await writeTaskFile(queueDir, task);
+    await writeTaskFile(queueDir, task, { profile });
     return task;
   });
 }
 
-async function executeTask(queueDir, task, runTask, runnerId) {
+async function executeTask(queueDir, task, runTask, runnerId, profile) {
   const finalize = async (result, status) => {
     await withSubmissionLock(queueDir, async () => {
       const currentTask = await readTaskFile(queueDir, task.id);
@@ -671,7 +838,7 @@ async function executeTask(queueDir, task, runTask, runnerId) {
       currentTask.updated_at = isoFrom(finishedAt);
       currentTask.completed_at = isoFrom(finishedAt);
       delete currentTask.runner_id;
-      await writeTaskFile(queueDir, currentTask);
+      await writeTaskFile(queueDir, currentTask, { profile });
     });
   };
 
@@ -727,7 +894,7 @@ async function runWithHeartbeat(runTask, refresh, intervalMs) {
   }
 }
 
-async function getTaskResultInternal(queueDir, taskId, config) {
+async function getTaskResultInternal(queueDir, taskId, config, profile) {
   if (!isValidTaskId(taskId)) {
     return createInvalidTaskIdResponse();
   }
@@ -759,7 +926,7 @@ async function getTaskResultInternal(queueDir, taskId, config) {
     }
     throw error;
   }
-  await recoverOrExpireTasks(queueDir, tasks, config, now);
+  await recoverOrExpireTasks(queueDir, tasks, config, now, profile);
 
   let task;
   try {
@@ -819,7 +986,6 @@ export function getQueueConfig(env = process.env, platform = process.platform) {
       : positiveNumber(configuredRunningStaleMs, defaultRunnerStaleMs),
     pollIntervalMs: positiveNumber(env.OPENCODE_ADVISOR_QUEUE_POLL_MS, 1000),
     timeoutMs,
-    opencodeDataHome: env.OPENCODE_ADVISOR_OPENCODE_DATA_HOME,
     sessionRetentionMs: positiveNumber(env.OPENCODE_ADVISOR_SESSION_RETENTION_MS, DEFAULT_SESSION_RETENTION_MS),
     taskRetentionMs: positiveNumber(env.OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS, DEFAULT_TASK_RETENTION_MS),
     maintenanceIntervalMs: positiveNumber(
@@ -843,9 +1009,9 @@ export function createTaskFile({ id = `ocq_${randomUUID().replace(/-/g, "")}`, r
   };
 }
 
-export async function writeTaskFile(queueDir, task) {
+export async function writeTaskFile(queueDir, task, { profile } = {}) {
   await ensureQueueDir(queueDir);
-  await writeJson(taskPath(queueDir, task.id), task);
+  await writeJson(taskPath(queueDir, task.id), redactTaskForPersistence(task, profile));
 }
 
 export async function lockSubmissionForTest(queueDir, fn, deps = {}) {
@@ -856,7 +1022,7 @@ export async function readTaskFile(queueDir, taskId) {
   return readJsonIfExists(taskPath(queueDir, taskId));
 }
 
-async function saveTaskSessionId(queueDir, task, runnerId, sessionId) {
+async function saveTaskSessionId(queueDir, task, runnerId, sessionId, profile) {
   await withSubmissionLock(queueDir, async () => {
     const current = await readTaskFile(queueDir, task.id);
     if (
@@ -866,7 +1032,7 @@ async function saveTaskSessionId(queueDir, task, runnerId, sessionId) {
     ) {
       current.session_id = sessionId;
       current.updated_at = isoFrom(Date.now());
-      await writeTaskFile(queueDir, current);
+      await writeTaskFile(queueDir, current, { profile });
     }
   });
 }
@@ -875,12 +1041,13 @@ export async function processQueueOnce({
   queueDir,
   config,
   runTask,
+  profile,
   now = Date.now(),
   runnerId = `runner_${process.pid}`,
   beforeClaim,
 }) {
   const tasks = await listTaskFiles(queueDir);
-  await recoverOrExpireTasks(queueDir, tasks, config, now);
+  await recoverOrExpireTasks(queueDir, tasks, config, now, profile);
   const refreshedTasks = await listTaskFiles(queueDir);
 
   const runningTasks = refreshedTasks.filter((task) => task.status === "running");
@@ -910,7 +1077,7 @@ export async function processQueueOnce({
 
   const claimedIds = await Promise.all(toStart.map(async (task) => {
     await beforeClaim?.(task);
-    const claimedTask = await claimTask(queueDir, task.id, runnerId, now);
+    const claimedTask = await claimTask(queueDir, task.id, runnerId, now, profile);
     if (!claimedTask) {
       return null;
     }
@@ -919,9 +1086,10 @@ export async function processQueueOnce({
       queueDir,
       claimedTask,
       (taskToRun) => runTask(taskToRun, {
-        onSessionId: (sessionId) => saveTaskSessionId(queueDir, taskToRun, runnerId, sessionId),
+        onSessionId: (sessionId) => saveTaskSessionId(queueDir, taskToRun, runnerId, sessionId, profile),
       }),
       runnerId,
+      profile,
     );
     return claimedTask.id;
   }));
@@ -960,21 +1128,47 @@ async function cleanExpiredTasks(queueDir, now, config) {
   }
 }
 
-async function cleanExpiredSessions(config, now, runSessionCommand) {
-  if (!config.opencodeDataHome) {
+async function cleanExpiredSessions(config, profile, now, runSessionCommand) {
+  if (!profile?.config || !profile?.paths) {
     return;
   }
 
-  const command = resolveOpencodeCommand(config.opencodeCommand ?? "opencode", {
-    env: config.env ?? process.env,
-    platform: config.platform ?? process.platform,
+  const platform = config.platform ?? process.platform;
+  const env = config.env ?? process.env;
+  const childEnv = buildOpenCodeChildEnv({
+    config: profile.config,
+    paths: profile.paths,
+    env,
+    platform,
+    includeCredential: false,
   });
+  const commands = resolveOpencodeCommands(env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode", {
+    env,
+    platform,
+  });
+  if (commands.length === 0) {
+    return;
+  }
   const options = {
-    env: { ...(config.env ?? process.env), XDG_DATA_HOME: config.opencodeDataHome },
+    cwd: profile.paths.home,
+    env: childEnv,
     timeoutMs: Math.min(config.timeoutMs, 30000),
-    platform: config.platform ?? process.platform,
+    platform,
   };
-  const listResult = await runSessionCommand(command, ["session", "list", "--format", "json"], options);
+  const runWithCandidates = async (args) => {
+    for (const command of commands) {
+      try {
+        return await runSessionCommand(command, args, options);
+      } catch (error) {
+        if (!isProcessLaunchError(error)) {
+          throw error;
+        }
+      }
+    }
+    return null;
+  };
+
+  const listResult = await runWithCandidates(["session", "list", "--format", "json"]);
   if (listResult?.code !== 0) {
     return;
   }
@@ -995,13 +1189,14 @@ async function cleanExpiredSessions(config, now, runSessionCommand) {
     ) {
       continue;
     }
-    await runSessionCommand(command, ["session", "delete", session.id], options);
+    await runWithCandidates(["session", "delete", session.id]);
   }
 }
 
 export async function runQueueMaintenance({
   queueDir,
   config,
+  profile,
   now = Date.now(),
   runSessionCommand = runProcess,
 } = {}) {
@@ -1013,7 +1208,7 @@ export async function runQueueMaintenance({
     }
 
     await cleanExpiredTasks(queueDir, now, config);
-    await cleanExpiredSessions(config, now, runSessionCommand);
+    await cleanExpiredSessions(config, profile, now, runSessionCommand);
     await writeJson(maintenanceStatePath(queueDir), { last_ran_at: isoFrom(now) });
     return true;
   });
@@ -1026,6 +1221,7 @@ export async function ensureQueueRunner({
   spawnProcess = spawn,
   nodeExec = process.execPath,
   processControl = defaultProcessControl(),
+  profile,
 } = {}) {
   await ensureQueueDir(config.queueDir);
   let stdoutHandle = null;
@@ -1055,10 +1251,7 @@ export async function ensureQueueRunner({
     return false;
   }
 
-  const runnerEnv = {
-    ...env,
-    OPENCODE_ADVISOR_QUEUE_DIR: config.queueDir,
-  };
+  const runnerEnv = buildQueueRunnerEnv(env, config.queueDir, profile);
 
   let stdio = "ignore";
   if (config.queueLogDir) {
@@ -1088,22 +1281,34 @@ export function createTaskQueue({
   platform = process.platform,
   spawnProcess = spawn,
   nodeExec = process.execPath,
+  loadAdvisorProfile: loadProfile = loadAdvisorProfileFromDisk,
 } = {}) {
   const config = getQueueConfig(env, platform);
+  const getPersistenceProfile = () => loadPersistenceProfile(loadProfile, env, platform);
 
   return {
     async submitAndWait({ role, input }) {
+      let profile;
+      try {
+        profile = await loadProfile({ env, platform });
+        if (!profile?.config || typeof profile.credential !== "string" || !profile.credential) {
+          return createSetupRequiredResponse();
+        }
+      } catch {
+        return createSetupRequiredResponse();
+      }
+
       try {
         const task = createTaskFile({ role, input });
-        const submitted = await submitTaskAtomically(config.queueDir, task, config);
+        const submitted = await submitTaskAtomically(config.queueDir, task, config, profile);
         if (!submitted.ok) {
           return submitted.result;
         }
-        await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec });
+        await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec, profile });
 
         const deadline = Date.now() + config.inlineWaitMs;
         for (;;) {
-          const result = await getTaskResultInternal(config.queueDir, task.id, config);
+          const result = await getTaskResultInternal(config.queueDir, task.id, config, profile);
           if (!(result?.error === "queued" && result?.details?.phase_pending)) {
             return result;
           }
@@ -1128,13 +1333,14 @@ export function createTaskQueue({
         if (!isValidTaskId(taskId)) {
           return createInvalidTaskIdResponse();
         }
-        const current = await getTaskResultInternal(config.queueDir, taskId, config);
+        const profile = await getPersistenceProfile();
+        const current = await getTaskResultInternal(config.queueDir, taskId, config, profile);
         if (!(current?.error === "queued" && current?.details?.phase_pending)) {
           return current;
         }
 
-        await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec });
-        return getTaskResultInternal(config.queueDir, taskId, config);
+        await ensureQueueRunner({ env, platform, config, spawnProcess, nodeExec, profile });
+        return getTaskResultInternal(config.queueDir, taskId, config, profile);
       } catch (error) {
         if (isQueueDirUnavailableError(error)) {
           return createQueueDirUnavailableResponse();
@@ -1152,6 +1358,7 @@ export async function runQueueRunner({
   sleep = delay,
   signals = process,
   processControl = defaultProcessControl(),
+  loadAdvisorProfile: loadProfile = loadAdvisorProfileFromDisk,
 } = {}) {
   let shuttingDown = false;
   const stop = () => {
@@ -1161,6 +1368,7 @@ export async function runQueueRunner({
   signals?.on?.("SIGINT", stop);
 
   const config = getQueueConfig(env, platform);
+  const profile = await loadPersistenceProfile(loadProfile, env, platform);
   const runnerId = `runner_${process.pid}_${Date.now()}`;
   const runnerState = {
     runner_id: runnerId,
@@ -1175,16 +1383,25 @@ export async function runQueueRunner({
 
   let idleSince = null;
   let consecutiveErrors = 0;
+  const runMaintenanceIfDue = () => runQueueMaintenance({
+    queueDir: config.queueDir,
+    config,
+    profile,
+  }).catch(() => {});
+  const refreshLeaseAndMaintain = async () => {
+    const ownsLease = await refreshRunnerLease(config.queueDir, runnerState, config);
+    if (ownsLease) {
+      await runMaintenanceIfDue();
+    }
+    return ownsLease;
+  };
   try {
-    await runQueueMaintenance({
-      queueDir: config.queueDir,
-      config,
-    }).catch(() => {});
+    await runMaintenanceIfDue();
 
     for (;;) {
       let cycle;
       try {
-        const ownsLease = await refreshRunnerLease(config.queueDir, runnerState, config);
+        const ownsLease = await refreshLeaseAndMaintain();
         if (!ownsLease) {
           break;
         }
@@ -1194,10 +1411,11 @@ export async function runQueueRunner({
             queueDir: config.queueDir,
             config,
             runTask,
+            profile,
             now: Date.now(),
             runnerId,
           }),
-          () => refreshRunnerLease(config.queueDir, runnerState, config),
+          refreshLeaseAndMaintain,
           config.runnerStaleMs,
         );
         consecutiveErrors = 0;

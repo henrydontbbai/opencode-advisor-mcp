@@ -1,51 +1,46 @@
-# Architecture And Trust Boundaries
+# Architecture
 
-Core flow: MCP → preflight → Git → Queue → OpenCode → sanitized public result.
+## Components
 
-```text
-Codex MCP client
-  → stdio server
-  → preflight (allowed roots, input limits, path/ref validation)
-  → Git context collection
-  → local file queue and runner
-  → OpenCode child process in a dedicated profile
-  → sanitized public result
-```
+`opencode-advisor-setup` is a non-MCP bootstrap CLI. It validates non-secret provider metadata, copies the two bundled agent templates, writes the manifest atomically, and stores the provider key through the platform credential layer. It is the sole source of the independent third-party provider ID, base URL, transport, models, optional per-role variants, role mapping, and key.
 
-## Request lifecycle
+`opencode-advisor-mcp` remains a stdio MCP server with three tools. It exposes only `reviewer`, `planner`, and task lookup. The internal role registry is static: no provider manifest can add an implementation role or change the MCP tool surface.
 
-1. The three public MCP tools are `ask_opencode_advisor`, `ask_opencode_planner`, and `get_opencode_task`.
-2. An ask request is preflighted before queue persistence: input limits, the canonical working directory, pathspecs, and Git ref syntax are checked.
-3. The queue stores a task locally, starts or reuses a lease-owning runner, and waits up to `OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS`.
-4. If work is still active, the caller receives `error: "queued"` with `task_id`, `retry_after_ms`, and `phase_pending: true`.
-5. A runner collects Git status/diff, starts `opencode run --agent ... --format json`, and records the internal session ID only in the task file.
-6. Final task states are `completed`, `failed`, `timeout`, or `expired`. `get_opencode_task` returns the same compatible public result shape as an inline completion.
+`opencode-advisor-doctor` is a non-MCP diagnostic CLI packaged with the runtime. It uses the same profile loader and OpenCode child environment as reviewer and planner calls.
 
-## Queue state model
+## Provider Execution
 
-```text
-queued → running → completed
-                 ↘ failed
-                 ↘ timeout
-queued/running → expired
-```
+For every reviewer or planner task:
 
-Runner lock and heartbeat records avoid concurrent execution. A stale owner is recovered only after its lease/pid checks permit it. Transient task-file reads stay pending rather than being reported as expired.
+1. The server validates allowed roots and input.
+2. It loads the independent profile, validates private profile entries, verifies the manifest and generated overlay agree, checks the credential's manifest fingerprint, and only then decrypts the credential in memory.
+3. It builds an isolated child environment with `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, and `OPENCODE_DISABLE_PROJECT_CONFIG=1`. The target repository's `opencode.json` is not merged.
+4. It generates `OPENCODE_CONFIG_CONTENT` with exactly one provider, `{env:OPENCODE_ADVISOR_PROVIDER_KEY}` as its key reference, and any configured role model variants.
+5. It removes inherited `OPENCODE_*`, `XDG_*`, provider key, token, secret, and password variables.
+6. It runs `opencode run --pure --agent <role> --model <provider/model> [--variant <role-variant>] --format json`.
 
-## Dedicated OpenCode profile
+The decrypted `OPENCODE_ADVISOR_PROVIDER_KEY` exists only in the OpenCode child environment. The key, provider URL, model selection, and role variant are not persisted in queue tasks, runner logs, doctor reports, or MCP responses. Setup and the child process do not read normal OpenCode, Codex, or Cockpit provider configuration, credentials, or account-login state.
 
-Every advisor task uses its own OpenCode session but shares a dedicated advisor data directory through child-process `XDG_DATA_HOME`. This keeps automatic sessions out of the user's normal OpenCode session list. The user must authenticate that profile separately with `opencode auth login`; the server never copies credentials, databases, or WAL files from the normal profile.
+`responses` uses `@ai-sdk/openai`; `chat_completions` uses `@ai-sdk/openai-compatible`. OpenCode owns the HTTP streaming and SSE handling. For a compatible `responses` provider/model, an optional role variant becomes an OpenCode model variant and sends matching `reasoning.effort` in the Responses request. Variant names such as `high` and `max` remain provider/model-dependent. The local provider contract exercises `POST /v1/responses` with streaming Responses output-text events (`response.output_text.delta`, `response.output_text.done`, and `response.completed`) and treats `error` / `response.failed` as a failed run. The Chat Completions contract exercises `POST /v1/chat/completions` with standard chunk SSE and `[DONE]`.
 
-Managed sessions are identified by `opencode-advisor:<task_id>`. Maintenance operates only in the dedicated profile and uses OpenCode session commands rather than manipulating SQLite files directly.
+## Agent And Tool Boundary
 
-## Timeouts
+The bundled `codex-advisor` and `codex-planning-partner` templates both set `permission: "*": deny`. They receive a prompt assembled from the caller request, collected Git status, optional diff, and, for the planner, an explicitly supplied current plan and constraints. They have no file, shell, web, subagent, or write tools, so they cannot inspect any repository state beyond that prompt.
 
-`startup_timeout_sec` is only the time Codex allows the stdio connection to start. It does not control a review. `tool_timeout_sec` is the outer per-tool budget and must be greater than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`; otherwise Codex can end the request before the inner OpenCode timeout.
+The Responses provider contract also covers function-call SSE (`response.function_call_arguments.delta`, `response.function_call_arguments.done`, and `response.output_item.done`). Internal provider or OpenCode tool events do not grant a capability, are not surfaced as MCP output, and do not count as assistant text. Because both built-in agents deny tools, the fixture call remains unexecuted and fails closed at the configured OpenCode timeout; the contract fixture uses a short timeout. It is not a completed tool round-trip.
 
-Git collection has a separate `OPENCODE_ADVISOR_GIT_TIMEOUT_MS` budget.
+## Queue Boundary
 
-## Trust boundary
+The server performs profile validation before `createTaskFile` is called. Therefore an unconfigured, incomplete, tampered, or binding-mismatched profile cannot create a task record. Detached queue runners receive only a reduced non-secret runtime environment and reload the profile themselves when executing a task. Session list/delete maintenance uses the same isolated profile paths but never injects the provider credential. The profile and queue form a local single-user boundary, not a multi-tenant storage system.
 
-This is a local, single-user MCP server. It does not provide caller authentication, tenant namespaces, cross-user task ownership, or a tamper-resistant audit log.
+Queue task JSON retains input, task state, and result metadata only. It never stores profile contents, provider model data, provider URL, or a credential.
 
-Allowed-root validation, agent deny rules, prompt delimiters, response sanitization, queue file permissions, and dedicated-profile isolation are defense-in-depth controls. They are scope controls, not a complete OS sandbox. Git status/diff, questions, plans, constraints, and working-directory context can reach the configured OpenCode provider; use only repositories you are authorized to disclose.
+## Credential Boundary
+
+On Windows, a fixed `powershell.exe` helper below `SystemRoot` uses `ProtectedData` with `CurrentUser`; plaintext and ciphertext cross the helper boundary through stdin/stdout only. On POSIX, credential storage falls back to filesystem protection: private profile directories use mode `0700`, the credential file uses mode `0600`, and the credential envelope is Base64-encoded rather than DPAPI-equivalent encryption. Where POSIX permission checks can be enforced, loading rejects unsafe modes, ownership, symlinks, and wrong file types.
+
+The credential metadata carries a fingerprint of the validated manifest. If setup is interrupted, the manifest/overlay is stale, or the credential binding fails, profile loading returns setup-required guidance before queuing or provider execution. The supported recovery is to rerun `opencode-advisor-setup`, not to edit profile artifacts. The setup flow does not copy credentials from other applications and does not support API key arguments or non-interactive API key input.
+
+## Command Boundary
+
+The default OpenCode command is `opencode`. A non-default `OPENCODE_ADVISOR_OPENCODE_CMD` must be an existing absolute executable path. On Windows it must be an absolute `.exe`; `.cmd`, `.bat`, and executable-plus-arguments strings are rejected. The implementation does not establish publisher trust itself, so the operator must select the `.exe` from a trusted location.

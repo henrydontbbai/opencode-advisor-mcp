@@ -1,0 +1,7 @@
+[mcp_servers.opencode_advisor]
+command = "opencode-advisor-mcp"
+startup_timeout_sec = 30
+tool_timeout_sec = 420
+
+[mcp_servers.opencode_advisor.env]
+OPENCODE_ADVISOR_ALLOWED_ROOTS = "C:\\workspace\\allowed-repositories"

@@ -11,7 +11,7 @@ npm test
 npm run test:doctor
 ```
 
-If you use the local OpenCode advisor flow, also install the bundled `codex-advisor.md` template and keep your allowed roots narrow.
+For a local advisor flow, run `npm run setup` to create an independent Advisor profile, set a narrow `OPENCODE_ADVISOR_ALLOWED_ROOTS`, and run `npm run doctor`. Do not copy templates, credentials, or configuration from a normal OpenCode, Codex, or Cockpit profile.
 
 ## Ground Rules
 

@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import path from "node:path";
-import { getDoctorOpenCodeEnv, runDoctor, findPayloadLeaks } from "../scripts/opencode-advisor-doctor.mjs";
+import { runDoctor as runDoctorImpl, findPayloadLeaks } from "../scripts/opencode-advisor-doctor.mjs";
 import {
   createPlannerSuccessResponse,
   createSuccessResponse,
@@ -11,7 +10,41 @@ import {
 
 const WINDOWS_ALLOWED_ROOT = "C:\\workspace\\repo-root";
 const WINDOWS_CHILD_REPO = `${WINDOWS_ALLOWED_ROOT}\\project`;
-const WINDOWS_DATA_HOME = "C:\\Users\\codex\\opencode-advisor-data";
+const TEST_ADVISOR_PROFILE = {
+  config: {
+    version: 1,
+    provider: {
+      id: "test-provider",
+      name: "Test Provider",
+      base_url: "https://models.example.test/v1",
+      transport: "responses",
+      models: [{ id: "test-model", name: "Test Model" }],
+    },
+    roles: {
+      reviewer: { model: "test-model", variant: "high" },
+      planner: { model: "test-model", variant: "max" },
+    },
+  },
+  paths: {
+    home: "C:\\advisor-profile",
+    configHome: "C:\\advisor-profile\\config",
+    dataHome: "C:\\advisor-profile\\data",
+    cacheHome: "C:\\advisor-profile\\cache",
+    stateHome: "C:\\advisor-profile\\state",
+    opencodeConfigPath: "C:\\advisor-profile\\config\\opencode.json",
+    opencodeConfigDir: "C:\\advisor-profile\\config-dir",
+  },
+  credential: "test-provider-secret",
+};
+
+function runDoctor(options = {}) {
+  return runDoctorImpl({
+    platform: "linux",
+    loadAdvisorProfile: async () => TEST_ADVISOR_PROFILE,
+    realpath: async (candidate) => candidate,
+    ...options,
+  });
+}
 
 function createCommandResult(overrides = {}) {
   return {
@@ -50,6 +83,8 @@ function createCanonicalPlannerSuccessPayload(overrides = {}) {
 }
 
 test("runDoctor succeeds with source-local health checks and sanitized payload", async () => {
+  const firstPathCommand = "C:\\tools-first\\opencode.exe";
+  const secondPathCommand = "C:\\tools-second\\opencode.exe";
   const commandCalls = [];
   let advisorInput;
   let advisorDeps;
@@ -58,8 +93,13 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
 
   const report = await runDoctor({
     cwd: WINDOWS_CHILD_REPO,
-    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+      Path: "C:\\tools-first;.;relative-tools;C:\\tools-second",
+    },
     platform: "win32",
+    existsSync: (candidate) => [firstPathCommand, secondPathCommand].includes(candidate),
+    isFile: (candidate) => [firstPathCommand, secondPathCommand].includes(candidate),
     runCommand: async (command, args, options) => {
       commandCalls.push({ command, args, options });
       return createCommandResult();
@@ -78,56 +118,40 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
 
   assert.equal(report.ok, true);
   assert.equal(report.bucket, null);
-  assert.deepEqual(commandCalls, [
-    {
-      command: "opencode",
-      args: ["run", "--agent", "codex-advisor", "--format", "json", "Say OK only."],
-      options: { cwd: WINDOWS_CHILD_REPO, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", timeoutMs: 300000 },
-    },
-    {
-      command: "opencode",
-      args: ["run", "--agent", "codex-planning-partner", "--format", "json", "Say OK only."],
-      options: { cwd: WINDOWS_CHILD_REPO, env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, platform: "win32", timeoutMs: 300000 },
-    },
+  assert.deepEqual(commandCalls.map((call) => call.command), [firstPathCommand, firstPathCommand]);
+  assert.equal(commandCalls.some((call) => call.command === "opencode"), false);
+  assert.deepEqual(commandCalls.map((call) => call.args), [
+    ["run", "--pure", "--agent", "codex-advisor", "--model", "test-provider/test-model", "--variant", "high", "--dir", WINDOWS_CHILD_REPO, "--format", "json", "Say OK only."],
+    ["run", "--pure", "--agent", "codex-planning-partner", "--model", "test-provider/test-model", "--variant", "max", "--dir", WINDOWS_CHILD_REPO, "--format", "json", "Say OK only."],
   ]);
+  for (const call of commandCalls) {
+    assert.equal(call.options.cwd, WINDOWS_CHILD_REPO);
+    assert.equal(call.options.platform, "win32");
+    assert.equal(call.options.timeoutMs, 300000);
+    assert.equal(call.options.env.OPENAI_API_KEY, undefined);
+    assert.equal(call.options.env.OPENCODE_ADVISOR_PROVIDER_KEY, "test-provider-secret");
+    assert.equal(call.options.env.OPENCODE_CONFIG_CONTENT.includes("test-provider-secret"), false);
+  }
   assert.deepEqual(advisorInput, {
     cwd: WINDOWS_CHILD_REPO,
     include_diff: false,
     include_status: false,
   });
-  assert.deepEqual(advisorDeps, {
-    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
-    platform: "win32",
-    useQueue: false,
-  });
+  assert.equal(advisorDeps.env.OPENCODE_ADVISOR_ALLOWED_ROOTS, WINDOWS_ALLOWED_ROOT);
+  assert.equal(advisorDeps.platform, "win32");
+  assert.equal(advisorDeps.useQueue, false);
+  assert.equal(typeof advisorDeps.loadAdvisorProfile, "function");
   assert.deepEqual(plannerInput, {
     cwd: WINDOWS_CHILD_REPO,
     include_diff: false,
     include_status: false,
     current_plan: "1. Validate config\n2. Run doctor",
   });
-  assert.deepEqual(plannerDeps, {
-    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
-    platform: "win32",
-    useQueue: false,
-  });
+  assert.equal(plannerDeps.env.OPENCODE_ADVISOR_ALLOWED_ROOTS, WINDOWS_ALLOWED_ROOT);
+  assert.equal(plannerDeps.platform, "win32");
+  assert.equal(plannerDeps.useQueue, false);
+  assert.equal(typeof plannerDeps.loadAdvisorProfile, "function");
   assert.equal(report.steps.every((step) => step.ok), true);
-});
-
-test("getDoctorOpenCodeEnv requires and injects the dedicated data home", () => {
-  const env = {
-    OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
-    OPENCODE_ADVISOR_OPENCODE_DATA_HOME: WINDOWS_DATA_HOME,
-  };
-
-  assert.deepEqual(getDoctorOpenCodeEnv(env, path.win32), {
-    ...env,
-    XDG_DATA_HOME: WINDOWS_DATA_HOME,
-  });
-  assert.throws(
-    () => getDoctorOpenCodeEnv({ OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT }, path.win32),
-    /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/i,
-  );
 });
 
 test("runDoctor classifies missing opencode command", async () => {
@@ -135,7 +159,10 @@ test("runDoctor classifies missing opencode command", async () => {
     cwd: "/repo",
     env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
     runCommand: async () => {
-      throw new Error("spawn opencode ENOENT");
+      throw Object.assign(new Error("spawn opencode ENOENT"), {
+        code: "ENOENT",
+        syscall: "spawn opencode",
+      });
     },
     askOpenCodeAdvisorImpl: async () => {
       throw new Error("should not reach health check");
@@ -147,21 +174,27 @@ test("runDoctor classifies missing opencode command", async () => {
   assert.equal(report.steps[0].ok, false);
 });
 
-test("runDoctor retries direct checks with an existing Windows fallback command", async () => {
-  const fallback = "C:\\Users\\codex\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe";
-  const calls = [];
+test("runDoctor falls back from PATH to a trusted Windows OpenCode executable", async () => {
+  const pathCommand = "C:\\tools-first\\opencode.exe";
+  const fallbackCommand = "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe";
+  const commandCalls = [];
   const report = await runDoctor({
     cwd: WINDOWS_CHILD_REPO,
     env: {
       OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
-      APPDATA: "C:\\Users\\codex\\AppData\\Roaming",
+      PATH: "C:\\tools-first",
+      APPDATA: "C:\\Users\\test\\AppData\\Roaming",
     },
     platform: "win32",
-    existsSync: (candidate) => candidate === fallback,
+    existsSync: (candidate) => candidate === pathCommand || candidate === fallbackCommand,
+    isFile: (candidate) => candidate === pathCommand || candidate === fallbackCommand,
     runCommand: async (command) => {
-      calls.push(command);
-      if (command === "opencode") {
-        throw new Error("spawn opencode ENOENT");
+      commandCalls.push(command);
+      if (command === pathCommand) {
+        const error = new Error("OpenCode executable is unavailable");
+        error.code = "ENOENT";
+        error.syscall = `spawn ${pathCommand}`;
+        throw error;
       }
       return createCommandResult();
     },
@@ -170,7 +203,149 @@ test("runDoctor retries direct checks with an existing Windows fallback command"
   });
 
   assert.equal(report.ok, true);
-  assert.deepEqual(calls, ["opencode", fallback, fallback]);
+  assert.deepEqual(commandCalls, [
+    pathCommand,
+    fallbackCommand,
+    pathCommand,
+    fallbackCommand,
+  ]);
+});
+
+test("runDoctor does not fall back after a non-spawn ENOENT failure", async () => {
+  const pathCommand = "C:\\tools-first\\opencode.exe";
+  const fallbackCommand = "C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe";
+  const commandCalls = [];
+  const report = await runDoctor({
+    cwd: WINDOWS_CHILD_REPO,
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+      PATH: "C:\\tools-first",
+      APPDATA: "C:\\Users\\test\\AppData\\Roaming",
+    },
+    platform: "win32",
+    existsSync: (candidate) => candidate === pathCommand || candidate === fallbackCommand,
+    isFile: (candidate) => candidate === pathCommand || candidate === fallbackCommand,
+    runCommand: async (command) => {
+      commandCalls.push(command);
+      if (command === pathCommand) {
+        throw Object.assign(new Error("provider reported ENOENT"), { code: "ENOENT" });
+      }
+      return createCommandResult();
+    },
+    askOpenCodeAdvisorImpl: async () => {
+      throw new Error("should not reach health check");
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "generic_opencode_failure");
+  assert.deepEqual(commandCalls, [pathCommand]);
+});
+
+test("runDoctor rejects relative and batch OpenCode command overrides on Windows", async () => {
+  for (const configuredCommand of [
+    "opencode.cmd",
+    ".\\opencode.cmd",
+    "C:\\tools\\opencode.cmd",
+    "C:\\tools\\opencode.bat",
+  ]) {
+    let commandCalls = 0;
+    const report = await runDoctor({
+      cwd: WINDOWS_CHILD_REPO,
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+        OPENCODE_ADVISOR_OPENCODE_CMD: configuredCommand,
+      },
+      platform: "win32",
+      existsSync: () => true,
+      runCommand: async () => {
+        commandCalls += 1;
+        return createCommandResult();
+      },
+    });
+
+    assert.equal(report.ok, false, configuredCommand);
+    assert.equal(report.bucket, "generic_opencode_failure", configuredCommand);
+    assert.equal(report.steps[0].id, "opencode-command", configuredCommand);
+    assert.equal(commandCalls, 0, configuredCommand);
+  }
+});
+
+test("runDoctor classifies provider authentication failures without leaking provider settings", async () => {
+  const secret = "provider-secret-value";
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    runCommand: async () => createCommandResult({
+      code: 1,
+      stderr: `401 Invalid token for https://models.example.test/v1 using ${secret}`,
+    }),
+    askOpenCodeAdvisorImpl: async () => {
+      throw new Error("should not reach health check");
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "provider_authentication_failed");
+  const reportText = JSON.stringify(report);
+  assert.equal(reportText.includes(secret), false);
+  assert.equal(reportText.includes("models.example.test"), false);
+});
+
+test("runDoctor fails closed with setup guidance when the isolated profile cannot load", async () => {
+  let commandRan = false;
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    loadAdvisorProfile: async () => {
+      throw new Error("credential decryption failed");
+    },
+    runCommand: async () => {
+      commandRan = true;
+      return createCommandResult();
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "provider_setup_required");
+  assert.equal(commandRan, false);
+  assert.match(report.steps[0].detail, /opencode-advisor-setup/);
+});
+
+test("runDoctor validates allowed roots before launching a direct agent check", async () => {
+  let commandCalls = 0;
+  const report = await runDoctor({
+    cwd: "/outside-allowed-root",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/inside-allowed-root" },
+    platform: "linux",
+    runCommand: async () => {
+      commandCalls += 1;
+      return createCommandResult();
+    },
+    askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload(),
+    askOpenCodePlannerImpl: async () => createCanonicalPlannerSuccessPayload(),
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "invalid_cwd_or_allowed_roots");
+  assert.equal(commandCalls, 0);
+});
+
+test("runDoctor rejects invalid allowed-root configuration before direct checks", async () => {
+  let commandCalls = 0;
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo\0invalid" },
+    platform: "linux",
+    runCommand: async () => {
+      commandCalls += 1;
+      return createCommandResult();
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "invalid_cwd_or_allowed_roots");
+  assert.equal(commandCalls, 0);
 });
 
 test("runDoctor classifies agent fallback from direct OpenCode output", async () => {
@@ -289,6 +464,36 @@ test("runDoctor rejects direct-agent output that exceeded the capture limit", as
   assert.equal(report.ok, false);
   assert.equal(report.bucket, "generic_opencode_failure");
   assert.match(report.steps[0].detail, /capture limit/i);
+});
+
+test("runDoctor rejects an empty direct agent response", async () => {
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    runCommand: async () => createCommandResult({ stdout: "" }),
+    askOpenCodeAdvisorImpl: async () => {
+      throw new Error("should not reach health check");
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "generic_opencode_failure");
+  assert.match(report.steps[0].detail, /structured JSON/i);
+});
+
+test("runDoctor rejects non-JSON direct agent output", async () => {
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    runCommand: async () => createCommandResult({ stdout: "BLOCKER: none" }),
+    askOpenCodeAdvisorImpl: async () => {
+      throw new Error("should not reach health check");
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "generic_opencode_failure");
+  assert.match(report.steps[0].detail, /structured JSON/i);
 });
 
 test("runDoctor classifies timeout from health check", async () => {
@@ -424,6 +629,32 @@ test("runDoctor fails sanitization check when success payload exposes forbidden 
   assert.equal(report.ok, false);
   assert.equal(report.bucket, "generic_opencode_failure");
   assert.equal(report.steps.at(-1).ok, false);
+});
+
+test("runDoctor rejects provider settings echoed inside an otherwise valid health payload", async () => {
+  const secret = "test-provider-secret";
+  const command = "C:\\tools\\opencode.exe";
+  const report = await runDoctor({
+    cwd: WINDOWS_CHILD_REPO,
+    env: {
+      OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+      Path: "C:\\tools",
+    },
+    platform: "win32",
+    existsSync: (candidate) => candidate === command,
+    isFile: (candidate) => candidate === command,
+    runCommand: async () => createCommandResult(),
+    askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload({
+      advisor_text: `${secret} https://models.example.test/v1 test-provider/test-model`,
+    }),
+    askOpenCodePlannerImpl: async () => createCanonicalPlannerSuccessPayload(),
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "generic_opencode_failure");
+  const reportText = JSON.stringify(report);
+  assert.equal(reportText.includes(secret), false);
+  assert.equal(reportText.includes("models.example.test"), false);
 });
 
 test("runDoctor fails when planner health check leaks forbidden fields", async () => {

@@ -149,7 +149,7 @@ export function getOpencodeFallbackCommands({
 
 export function resolveOpencodeCommand(
   base,
-  { env = process.env, platform = process.platform, exists = existsSync, isFile = defaultIsFile } = {},
+  { env: _env = process.env, platform = process.platform, exists = existsSync, isFile = defaultIsFile } = {},
 ) {
   if (base === "opencode") return "opencode";
 

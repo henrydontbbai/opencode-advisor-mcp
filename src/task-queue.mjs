@@ -130,10 +130,6 @@ function runnerStartupPath(queueDir) {
   return path.join(queueDir, RUNNER_STARTUP_FILENAME);
 }
 
-function maintenanceLockPath(queueDir) {
-  return path.join(queueDir, "_maintenance.lock");
-}
-
 function maintenanceStatePath(queueDir) {
   return path.join(queueDir, "_maintenance.json");
 }
@@ -280,7 +276,7 @@ function redactTaskResult(result, profile) {
 }
 
 function redactTaskForPersistence(task, profile) {
-  const { profile: ignoredProfile, credential: ignoredCredential, input, result, ...queueMetadata } = task;
+  const { profile: _profile, credential: _credential, input, result, ...queueMetadata } = task;
   const persisted = { ...queueMetadata };
   if (Object.hasOwn(task, "input")) {
     persisted.input = profile ? redactAdvisorProviderValue(input, profile) : input;

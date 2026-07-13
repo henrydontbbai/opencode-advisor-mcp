@@ -62,6 +62,8 @@ Only non-secret controls belong in the MCP server environment:
 - `OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS`: retain terminal queue tasks for this many milliseconds before maintenance deletes them; default `604800000` (7 days)
 - `OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS`: minimum interval between queue-maintenance passes, default `21600000` (6 hours)
 
+Session retention applies only to sessions with an Advisor ownership record under `<queue-dir>/_sessions/`. Queue, direct, and doctor calls create these private records after OpenCode reports a session ID. Maintenance deletes an expired session by its recorded ID and original working directory, without listing or scanning ordinary OpenCode sessions and without loading the provider credential. A failed deletion keeps the ownership record for a later retry. Sessions created by older versions without durable ownership metadata, including legacy untitled sessions, are intentionally left untouched.
+
 `OPENCODE_ADVISOR_HOME` is a local profile-location override for setup and the local server process. It must be absolute and is not an MCP provider setting; do not place it in a shared MCP configuration unless every user intentionally uses that same local profile.
 
 `OPENCODE_ADVISOR_TEST_FILE_TIMEOUT_MS` is a test-runner-only timeout for `npm test`; it is not a server configuration setting.

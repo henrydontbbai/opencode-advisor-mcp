@@ -19,6 +19,12 @@ import {
   positiveNumber,
   resolveOpencodeCommands,
 } from "./runtime-shared.mjs";
+import {
+  createManagedSessionTitle,
+  listManagedSessionRecords,
+  recordManagedSession,
+  removeManagedSessionRecord,
+} from "./session-lifecycle.mjs";
 
 const QUEUE_PENDING_MESSAGE =
   "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.";
@@ -36,7 +42,6 @@ const DEFAULT_SESSION_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "expired", "timeout"]);
-const SESSION_TITLE_PREFIX = "opencode-advisor:";
 const MAX_CONSECUTIVE_RUNNER_ERRORS = 3;
 const RUNNER_TERMINATION_WAIT_MS = 5000;
 const RUNNER_PLATFORM_ENVIRONMENT_NAMES = new Set([
@@ -1176,6 +1181,17 @@ async function saveTaskSessionId(queueDir, task, runnerId, sessionId, profile) {
   });
 }
 
+async function saveTaskSessionOwnership(queueDir, task, runnerId, sessionId, metadata, profile) {
+  await saveTaskSessionId(queueDir, task, runnerId, sessionId, profile);
+  await recordManagedSession({
+    queueDir,
+    sessionId,
+    cwd: metadata?.cwd ?? task.input?.cwd,
+    title: metadata?.title ?? createManagedSessionTitle(task.id),
+    observedAt: metadata?.observedAt ?? Date.now(),
+  });
+}
+
 export async function processQueueOnce({
   queueDir,
   config,
@@ -1225,7 +1241,14 @@ export async function processQueueOnce({
       queueDir,
       claimedTask,
       (taskToRun) => runTask(taskToRun, {
-        onSessionId: (sessionId) => saveTaskSessionId(queueDir, taskToRun, runnerId, sessionId, profile),
+        onSessionId: (sessionId, metadata) => saveTaskSessionOwnership(
+          queueDir,
+          taskToRun,
+          runnerId,
+          sessionId,
+          metadata,
+          profile,
+        ),
       }),
       runnerId,
       profile,
@@ -1267,7 +1290,37 @@ async function cleanExpiredTasks(queueDir, now, config) {
   }
 }
 
-async function cleanExpiredSessions(config, profile, now, runSessionCommand) {
+async function backfillTaskSessionOwnership(queueDir) {
+  // Queue session IDs and managed task titles were introduced together, so retained task metadata proves ownership.
+  const tasks = await listTaskFiles(queueDir);
+  for (const task of tasks) {
+    if (typeof task?.session_id !== "string" || typeof task?.input?.cwd !== "string") continue;
+    try {
+      await recordManagedSession({
+        queueDir,
+        sessionId: task.session_id,
+        cwd: task.input.cwd,
+        title: createManagedSessionTitle(task.id),
+        observedAt: task.updated_at || task.completed_at || task.created_at,
+      });
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+    }
+  }
+}
+
+async function clearTaskSessionOwnership(queueDir, sessionId, profile) {
+  await withSubmissionLock(queueDir, async () => {
+    const tasks = await listTaskFiles(queueDir);
+    for (const task of tasks) {
+      if (task.session_id !== sessionId) continue;
+      delete task.session_id;
+      await writeTaskFile(queueDir, task, { profile });
+    }
+  });
+}
+
+async function cleanExpiredSessions(queueDir, config, profile, now, runSessionCommand) {
   if (!profile?.config || !profile?.paths) {
     return;
   }
@@ -1288,47 +1341,36 @@ async function cleanExpiredSessions(config, profile, now, runSessionCommand) {
   if (commands.length === 0) {
     return;
   }
-  const options = {
-    cwd: profile.paths.home,
-    env: childEnv,
-    timeoutMs: Math.min(config.timeoutMs, 30000),
-    platform,
-  };
-  const runWithCandidates = async (args) => {
+  const runWithCandidates = async (args, cwd) => {
     for (const command of commands) {
       try {
-        return await runSessionCommand(command, args, options);
+        return await runSessionCommand(command, args, {
+          cwd,
+          env: childEnv,
+          timeoutMs: Math.min(config.timeoutMs, 30000),
+          platform,
+        });
       } catch (error) {
         if (!isProcessLaunchError(error)) {
-          throw error;
+          return null;
         }
       }
     }
     return null;
   };
 
-  const listResult = await runWithCandidates(["session", "list", "--format", "json"]);
-  if (listResult?.code !== 0) {
-    return;
-  }
-
-  let sessions;
-  try {
-    sessions = JSON.parse(listResult.stdout || "[]");
-  } catch {
-    return;
-  }
-
+  const sessions = await listManagedSessionRecords(queueDir);
   for (const session of sessions) {
-    if (
-      typeof session?.id !== "string"
-      || !String(session.title || "").startsWith(SESSION_TITLE_PREFIX)
-      || !Number.isFinite(Number(session.updated))
-      || now - Number(session.updated) < config.sessionRetentionMs
-    ) {
-      continue;
+    const observedAt = Date.parse(session.observed_at);
+    if (!Number.isFinite(observedAt) || now - observedAt < config.sessionRetentionMs) continue;
+    await clearTaskSessionOwnership(queueDir, session.session_id, profile);
+    const result = await runWithCandidates(
+      ["session", "delete", session.session_id, "--pure"],
+      session.cwd,
+    );
+    if (result?.code === 0) {
+      await removeManagedSessionRecord(queueDir, session.session_id);
     }
-    await runWithCandidates(["session", "delete", session.id]);
   }
 }
 
@@ -1346,8 +1388,9 @@ export async function runQueueMaintenance({
       return false;
     }
 
+    await backfillTaskSessionOwnership(queueDir);
+    await cleanExpiredSessions(queueDir, config, profile, now, runSessionCommand);
     await cleanExpiredTasks(queueDir, now, config);
-    await cleanExpiredSessions(config, profile, now, runSessionCommand);
     await writeJson(maintenanceStatePath(queueDir), { last_ran_at: isoFrom(now) });
     return true;
   });

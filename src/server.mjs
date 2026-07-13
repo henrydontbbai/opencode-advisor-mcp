@@ -13,9 +13,13 @@ import {
   runOpenCodePlannerNow,
   truncateText,
 } from "./opencode-core.mjs";
-import { createTaskQueue } from "./task-queue.mjs";
+import { createTaskQueue, getQueueConfig } from "./task-queue.mjs";
 import { redactAdvisorProviderValue } from "./provider-profile.mjs";
 import { pathForPlatform, resolveOpencodeCommand } from "./runtime-shared.mjs";
+import {
+  createManagedSessionOwnerId,
+  recordManagedSession as recordManagedSessionOnDisk,
+} from "./session-lifecycle.mjs";
 
 const packageMetadata = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -28,6 +32,28 @@ function getTaskQueue(deps = {}) {
   });
 }
 
+function withDirectSessionOwnership(role, deps = {}) {
+  const env = deps.env ?? process.env;
+  const platform = deps.platform ?? process.platform;
+  const queueDir = getQueueConfig(env, platform).queueDir;
+  const taskId = deps.taskId ?? createManagedSessionOwnerId(`direct-${role}`);
+  const recordManagedSession = deps.recordManagedSession ?? recordManagedSessionOnDisk;
+  return {
+    ...deps,
+    taskId,
+    onSessionId: async (sessionId, metadata) => {
+      await recordManagedSession({
+        queueDir,
+        sessionId,
+        cwd: metadata?.cwd,
+        title: metadata?.title,
+        observedAt: metadata?.observedAt,
+      });
+      await deps.onSessionId?.(sessionId, metadata);
+    },
+  };
+}
+
 export {
   extractOpenCodeText,
   isPathInsideAllowedRoots,
@@ -37,7 +63,7 @@ export {
 
 export async function askOpenCodeAdvisor(input = {}, deps = {}) {
   if (deps.useQueue === false) {
-    return runOpenCodeAdvisorNow(input, deps);
+    return runOpenCodeAdvisorNow(input, withDirectSessionOwnership("reviewer", deps));
   }
 
   const preflight = await preflightOpenCodeTask("reviewer", input, deps);
@@ -53,7 +79,7 @@ export async function askOpenCodeAdvisor(input = {}, deps = {}) {
 
 export async function askOpenCodePlanner(input = {}, deps = {}) {
   if (deps.useQueue === false) {
-    return runOpenCodePlannerNow(input, deps);
+    return runOpenCodePlannerNow(input, withDirectSessionOwnership("planner", deps));
   }
 
   const preflight = await preflightOpenCodeTask("planner", input, deps);

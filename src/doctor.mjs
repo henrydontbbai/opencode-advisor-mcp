@@ -2,7 +2,8 @@
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { askOpenCodeAdvisor, askOpenCodePlanner } from "./server.mjs";
-import { preflightOpenCodeTask, runProcess } from "./opencode-core.mjs";
+import { extractOpenCodeSessionId, preflightOpenCodeTask, runProcess } from "./opencode-core.mjs";
+import { getQueueConfig } from "./task-queue.mjs";
 import {
   DEFAULT_TIMEOUT_MS,
   PLANNER_SUCCESS_RESPONSE_KEYS,
@@ -22,6 +23,11 @@ import {
   loadAdvisorProfile,
   SETUP_GUIDANCE,
 } from "./provider-profile.mjs";
+import {
+  createManagedSessionOwnerId,
+  createManagedSessionTitle,
+  recordManagedSession as recordManagedSessionOnDisk,
+} from "./session-lifecycle.mjs";
 
 const FORBIDDEN_SUCCESS_KEYS = new Set(["cwd", "stderr_tail", "stdout_tail", "allowed_roots"]);
 const ALLOWED_SUCCESS_KEYS_BY_ROLE = {
@@ -141,6 +147,8 @@ async function runDirectAgentCheck({
   timeoutMs,
   model,
   variant,
+  title,
+  onSessionId,
   runCommandImpl,
 }) {
   let directResult;
@@ -161,6 +169,8 @@ async function runDirectAgentCheck({
           cwd,
           "--format",
           "json",
+          "--title",
+          title,
           "Say OK only.",
         ],
         { cwd, env, platform, timeoutMs },
@@ -185,6 +195,29 @@ async function runDirectAgentCheck({
       },
       summary: "OpenCode command could not be started",
     };
+  }
+
+  const sessionId = extractOpenCodeSessionId(directResult.stdout);
+  if (sessionId) {
+    try {
+      await onSessionId(sessionId, {
+        cwd,
+        title,
+        observedAt: new Date().toISOString(),
+      });
+    } catch {
+      return {
+        ok: false,
+        bucket: "generic_opencode_failure",
+        step: {
+          id: agentName,
+          label,
+          ok: false,
+          detail: "session ownership could not be persisted",
+        },
+        summary: `${label} session ownership could not be persisted`,
+      };
+    }
   }
 
   if (directResult.timedOut) {
@@ -306,6 +339,7 @@ export async function runDoctor({
   existsSync: exists = existsSync,
   isFile,
   loadAdvisorProfile: loadProfile = loadAdvisorProfile,
+  recordManagedSession: recordManagedSessionImpl = recordManagedSessionOnDisk,
   realpath,
 } = {}) {
   const timeoutMs = positiveNumber(env.OPENCODE_ADVISOR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
@@ -399,7 +433,11 @@ export async function runDoctor({
     return buildFailureReport("opencode_not_found", steps, "OpenCode command could not be started");
   }
 
+  const queueDir = getQueueConfig(env, platform).queueDir;
+
   for (const directCheck of DIRECT_AGENT_CHECKS) {
+    const ownerId = createManagedSessionOwnerId(`doctor-direct-${directCheck.role}`);
+    const title = createManagedSessionTitle(ownerId);
     const result = await runDirectAgentCheck({
       opencodeCommands,
       cwd: canonicalCwd,
@@ -409,6 +447,14 @@ export async function runDoctor({
       runCommandImpl,
       model: `${profile.config.provider.id}/${profile.config.roles[directCheck.role].model}`,
       variant: profile.config.roles[directCheck.role].variant,
+      title,
+      onSessionId: (sessionId, metadata) => recordManagedSessionImpl({
+        queueDir,
+        sessionId,
+        cwd: metadata.cwd,
+        title: metadata.title,
+        observedAt: metadata.observedAt,
+      }),
       ...directCheck,
     });
     steps.push(result.step);
@@ -430,6 +476,8 @@ export async function runDoctor({
       existsSync: exists,
       isFile,
       loadAdvisorProfile: async () => profile,
+      taskId: createManagedSessionOwnerId("doctor-health-reviewer"),
+      recordManagedSession: recordManagedSessionImpl,
     },
   );
 
@@ -484,6 +532,8 @@ export async function runDoctor({
       existsSync: exists,
       isFile,
       loadAdvisorProfile: async () => profile,
+      taskId: createManagedSessionOwnerId("doctor-health-planner"),
+      recordManagedSession: recordManagedSessionImpl,
     },
   );
 

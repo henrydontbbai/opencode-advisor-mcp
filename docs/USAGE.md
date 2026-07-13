@@ -74,7 +74,7 @@ Available non-secret queue controls:
 
 `OPENCODE_ADVISOR_QUEUE_DIR` uses its value as the queue directory. `OPENCODE_ADVISOR_QUEUE_LOG_DIR` enables local detached-runner logs for local diagnosis. Neither location contains provider credentials or profile data.
 
-Maintenance removes expired terminal task files and Advisor-owned OpenCode sessions. Session cleanup uses the independent profile's isolated OpenCode environment without the provider credential.
+Maintenance removes expired terminal task files and sessions with durable Advisor ownership records. Session cleanup uses the independent profile's isolated OpenCode environment without the provider credential, deletes exact recorded IDs instead of scanning OpenCode session listings, and retains failed deletions for retry. Legacy sessions without an ownership record are not deleted automatically.
 
 ## Doctor
 

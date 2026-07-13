@@ -3,12 +3,16 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const serverPath = fileURLToPath(new URL("../src/server.mjs", import.meta.url));
 const outsidePath = process.platform === "win32" ? "C:\\Windows" : "/tmp/not-allowed";
+const packageJson = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
 
 async function withClient(fn) {
   const transport = new StdioClientTransport({
@@ -40,6 +44,7 @@ function parseToolJson(result) {
 
 test("stdio MCP server lists all public tools", async () => {
   await withClient(async (client) => {
+    assert.equal(client.getServerVersion()?.version, packageJson.version);
     const listed = await client.listTools();
     const toolNames = listed.tools.map((tool) => tool.name).sort();
 

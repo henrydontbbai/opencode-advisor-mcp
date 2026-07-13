@@ -912,6 +912,90 @@ test("a transient runner-state read cannot requeue an in-flight task", async () 
   assert.equal((await readTaskFile(queueDir, "ocq_unreadablerunnerstate")).status, "running");
 });
 
+test("a public poll cannot restore a stale running snapshot after a runner completes it", async () => {
+  const queueDir = createTempDir();
+  const staleAt = new Date(Date.now() - 10000).toISOString();
+  const task = {
+    ...createTaskFile({
+      id: "ocq_recoveryrace",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "do not run twice" },
+    }),
+    status: "running",
+    created_at: staleAt,
+    updated_at: staleAt,
+    started_at: staleAt,
+    runner_id: "runner_abandoned",
+  };
+  await writeTaskFile(queueDir, task);
+
+  const env = {
+    OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+    OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "1",
+    OPENCODE_ADVISOR_TASK_TTL_MS: "600000",
+  };
+  const config = getQueueConfig(env, process.platform);
+  const snapshotRead = createGate();
+  const resumePoll = createGate();
+  const readFile = fs.readFile;
+  const taskFile = path.join(queueDir, `${task.id}.json`);
+  let taskReadCount = 0;
+  fs.readFile = async (filePath, ...args) => {
+    if (path.resolve(filePath) === taskFile) {
+      taskReadCount += 1;
+      if (taskReadCount !== 2) {
+        return readFile(filePath, ...args);
+      }
+      const staleSnapshot = await readFile(filePath, ...args);
+      snapshotRead.open();
+      await resumePoll.wait();
+      return staleSnapshot;
+    }
+    return readFile(filePath, ...args);
+  };
+
+  const executions = [];
+  try {
+    const queue = createConfiguredTaskQueue({
+      env,
+      platform: process.platform,
+      spawnProcess: () => ({ unref() {} }),
+    });
+    const poll = queue.getTaskResult({ task_id: task.id });
+    await waitFor(snapshotRead.wait());
+
+    await processQueueOnce({
+      queueDir,
+      config,
+      runnerId: "runner_reclaimer",
+      runTask: async (claimedTask) => {
+        executions.push(claimedTask.id);
+        return successfulTaskResult(claimedTask);
+      },
+    });
+    resumePoll.open();
+    const pollResult = await poll;
+    assert.equal(pollResult.ok, true);
+    assert.equal(pollResult.planner_text, "ok");
+
+    await processQueueOnce({
+      queueDir,
+      config,
+      runnerId: "runner_second_pass",
+      runTask: async (claimedTask) => {
+        executions.push(claimedTask.id);
+        return successfulTaskResult(claimedTask);
+      },
+    });
+
+    assert.deepEqual(executions, [task.id]);
+    assert.equal((await readTaskFile(queueDir, task.id)).status, "completed");
+  } finally {
+    resumePoll.open();
+    fs.readFile = readFile;
+  }
+});
+
 test("runQueueRunner terminates a live stale owner before taking over its lease", async () => {
   const queueDir = createTempDir();
   const staleAt = new Date(Date.now() - 5000).toISOString();

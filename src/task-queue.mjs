@@ -514,7 +514,7 @@ async function submitTaskAtomically(queueDir, task, config, profile) {
   return withSubmissionLock(queueDir, async () => {
     const now = Date.now();
     const tasks = await listTaskFiles(queueDir);
-    await recoverOrExpireTasks(queueDir, tasks, config, now, profile);
+    await recoverOrExpireTasks(queueDir, tasks, config, now, profile, { submissionLockHeld: true });
     const refreshedTasks = await listTaskFiles(queueDir);
     const pendingCount = refreshedTasks.filter((entry) => entry.status === "queued" || entry.status === "running").length;
     if (pendingCount >= config.maxPending) {
@@ -875,49 +875,71 @@ async function delay(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function recoverOrExpireTasks(queueDir, tasks, config, now, profile) {
-  let runnerState;
-  let runnerStateUnreadable = false;
-  try {
-    runnerState = await readRunnerState(queueDir);
-  } catch (error) {
-    if (error?.code === QUEUE_READ_RETRY_CODE) {
-      runnerStateUnreadable = true;
-    } else {
-      throw error;
-    }
-  }
-  for (const task of tasks) {
-    const { updatedAt, createdAt } = normalizeTaskAge(task, now);
-    const age = now - createdAt;
-    const staleRuntime = now - updatedAt;
-    const activeRunnerOwnsTask = task.status === "running"
-      && (
-        runnerStateUnreadable
-        || (sameRunner(task, runnerState) && isRunnerFresh(runnerState, now, config))
-      );
+function matchesRecoverySnapshot(snapshot, current) {
+  return Boolean(
+    current
+    && current.status === snapshot.status
+    && current.runner_id === snapshot.runner_id
+    && Number(current.attempt_count || 0) === Number(snapshot.attempt_count || 0)
+    && current.updated_at === snapshot.updated_at,
+  );
+}
 
-    const eligibleForExpiry = task.status === "queued"
-      || (task.status === "running" && staleRuntime > config.runningStaleMs && !activeRunnerOwnsTask);
-    if (age > config.taskTtlMs && eligibleForExpiry) {
-      task.status = "expired";
-      task.updated_at = isoFrom(now);
-      task.result = task.result ?? createExpiredResponse(task.id);
-      delete task.runner_id;
-      delete task.started_at;
-      await writeTaskFile(queueDir, task, { profile });
-      continue;
+async function recoverOrExpireTasks(queueDir, tasks, config, now, profile, { submissionLockHeld = false } = {}) {
+  const recover = async () => {
+    let runnerState;
+    let runnerStateUnreadable = false;
+    try {
+      runnerState = await readRunnerState(queueDir);
+    } catch (error) {
+      if (error?.code === QUEUE_READ_RETRY_CODE) {
+        runnerStateUnreadable = true;
+      } else {
+        throw error;
+      }
     }
 
-    if (task.status === "running" && staleRuntime > config.runningStaleMs && !activeRunnerOwnsTask) {
-      task.status = "queued";
-      task.updated_at = isoFrom(now);
-      delete task.runner_id;
-      delete task.started_at;
-      await writeTaskFile(queueDir, task, { profile });
-      continue;
+    for (const snapshot of tasks) {
+      const task = await readTaskFile(queueDir, snapshot.id);
+      if (!matchesRecoverySnapshot(snapshot, task)) {
+        continue;
+      }
+
+      const { updatedAt, createdAt } = normalizeTaskAge(task, now);
+      const age = now - createdAt;
+      const staleRuntime = now - updatedAt;
+      const activeRunnerOwnsTask = task.status === "running"
+        && (
+          runnerStateUnreadable
+          || (sameRunner(task, runnerState) && isRunnerFresh(runnerState, now, config))
+        );
+
+      const eligibleForExpiry = task.status === "queued"
+        || (task.status === "running" && staleRuntime > config.runningStaleMs && !activeRunnerOwnsTask);
+      if (age > config.taskTtlMs && eligibleForExpiry) {
+        task.status = "expired";
+        task.updated_at = isoFrom(now);
+        task.result = task.result ?? createExpiredResponse(task.id);
+        delete task.runner_id;
+        delete task.started_at;
+        await writeTaskFile(queueDir, task, { profile });
+        continue;
+      }
+
+      if (task.status === "running" && staleRuntime > config.runningStaleMs && !activeRunnerOwnsTask) {
+        task.status = "queued";
+        task.updated_at = isoFrom(now);
+        delete task.runner_id;
+        delete task.started_at;
+        await writeTaskFile(queueDir, task, { profile });
+      }
     }
+  };
+
+  if (submissionLockHeld) {
+    return recover();
   }
+  return withSubmissionLock(queueDir, recover);
 }
 
 async function claimTask(queueDir, taskId, runnerId, now, profile) {

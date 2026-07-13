@@ -434,7 +434,8 @@ test("getQueueConfig keeps queue state under an explicitly configured advisor pr
 });
 
 test("ensureQueueRunner normalizes a relative queue override before spawning the runner", async () => {
-  const relativeQueueDir = path.relative(process.cwd(), path.join(os.tmpdir(), "ocq-relative-runner"));
+  const queueDir = createTempDir("ocq-relative-runner-");
+  const relativeQueueDir = path.relative(process.cwd(), queueDir);
   const env = {
     OPENCODE_ADVISOR_QUEUE_DIR: relativeQueueDir,
   };
@@ -1289,6 +1290,332 @@ test("createTaskQueue rejects unsafe public task ids before any runner work", as
   assert.equal(result.error, "opencode_failed");
   assert.match(result.message, /invalid/i);
   assert.equal(spawnCalled, false);
+});
+
+test("createTaskQueue returns stable failures for terminal tasks missing a result", async () => {
+  const queueDir = createTempDir();
+  const cases = [
+    {
+      id: "ocq_missingtimeout",
+      status: "timeout",
+      expected: {
+        ok: false,
+        error: "timeout",
+        message: "OpenCode task timed out.",
+        details: {},
+      },
+    },
+    {
+      id: "ocq_missingexpired",
+      status: "expired",
+      expected: {
+        ok: false,
+        error: "opencode_failed",
+        message: "OpenCode task expired before completion or is no longer available.",
+        details: {
+          task_id: "ocq_missingexpired",
+          status: "expired",
+          phase_pending: false,
+        },
+      },
+    },
+    {
+      id: "ocq_missingfailed",
+      status: "failed",
+      expected: {
+        ok: false,
+        error: "opencode_failed",
+        message: "OpenCode task failed before a result could be recovered.",
+        details: {},
+      },
+    },
+    {
+      id: "ocq_missingcompleted",
+      status: "completed",
+      expected: {
+        ok: false,
+        error: "opencode_failed",
+        message: "OpenCode task failed before a result could be recovered.",
+        details: {},
+      },
+    },
+    {
+      id: "ocq_missingcompleted",
+      status: "completed",
+      expected: {
+        ok: false,
+        error: "opencode_failed",
+        message: "OpenCode task failed before a result could be recovered.",
+        details: {},
+      },
+    },
+  ];
+  for (const entry of cases) {
+    await writeTaskFile(queueDir, {
+      ...createTaskFile({
+        id: entry.id,
+        role: "planner",
+        input: { cwd: "/repo", current_plan: "recover terminal task" },
+      }),
+      status: entry.status,
+      completed_at: new Date().toISOString(),
+    });
+  }
+
+  let spawnCount = 0;
+  const queue = createTaskQueue({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      return { unref() {} };
+    },
+  });
+
+  for (const entry of cases) {
+    assert.deepEqual(await queue.getTaskResult({ task_id: entry.id }), entry.expected);
+  }
+  assert.equal(spawnCount, 0);
+});
+
+test("processQueueOnce reclaims tasks when matching runner heartbeats are missing or invalid", async () => {
+  for (const heartbeatAt of [undefined, "not-a-date"]) {
+    const queueDir = createTempDir();
+    const now = Date.now();
+    const runnerId = `runner_${heartbeatAt ?? "missing"}`;
+    await writeTaskFile(queueDir, {
+      ...createTaskFile({
+        id: `ocq_badheartbeat${heartbeatAt ? "invalid" : "missing"}`,
+        role: "planner",
+        input: { cwd: "/repo", current_plan: "recover stale owner" },
+        now: now - 5000,
+      }),
+      status: "running",
+      updated_at: new Date(now - 5000).toISOString(),
+      started_at: new Date(now - 5000).toISOString(),
+      runner_id: runnerId,
+    });
+    writeFileSync(
+      path.join(queueDir, "_runner.json"),
+      `${JSON.stringify({ runner_id: runnerId, pid: process.pid, heartbeat_at: heartbeatAt })}\n`,
+      "utf8",
+    );
+
+    const started = [];
+    await processQueueOnce({
+      queueDir,
+      config: getQueueConfig({
+        OPENCODE_ADVISOR_CONCURRENCY_GLOBAL: "1",
+        OPENCODE_ADVISOR_CONCURRENCY_PLANNER: "1",
+        OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "1",
+        OPENCODE_ADVISOR_TASK_TTL_MS: "600000",
+      }, process.platform),
+      runnerId: "runner_recovery",
+      runTask: async (task) => {
+        started.push(task.id);
+        return successfulTaskResult(task);
+      },
+    });
+
+    assert.deepEqual(started, [`ocq_badheartbeat${heartbeatAt ? "invalid" : "missing"}`]);
+  }
+});
+
+test("repeated pending polls do not spawn a runner while a fresh live lease exists", async () => {
+  const queueDir = createTempDir();
+  const liveRunner = {
+    runner_id: "runner_live",
+    pid: process.pid,
+    heartbeat_at: new Date().toISOString(),
+    lease_expires_at: new Date(Date.now() + 600000).toISOString(),
+    started_at: new Date().toISOString(),
+  };
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_freshleasepoll",
+    role: "reviewer",
+    input: { cwd: "/repo", question: "wait for the live runner" },
+  }));
+  writeFileSync(path.join(queueDir, "_runner.lock"), `${JSON.stringify(liveRunner)}\n`, "utf8");
+  writeFileSync(path.join(queueDir, "_runner.json"), `${JSON.stringify(liveRunner)}\n`, "utf8");
+
+  let spawnCount = 0;
+  const queue = createTaskQueue({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "600000",
+    },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      return { unref() {} };
+    },
+  });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await queue.getTaskResult({ task_id: "ocq_freshleasepoll" });
+    assert.equal(result.error, "queued");
+    assert.equal(result.details.phase_pending, true);
+  }
+  assert.equal(spawnCount, 0);
+});
+
+test("repeated pending polls start only one runner before it records a lease", async () => {
+  const queueDir = createTempDir();
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_startingrunnerpoll",
+    role: "reviewer",
+    input: { cwd: "/repo", question: "wait for the starting runner" },
+  }));
+
+  let spawnCount = 0;
+  const queue = createTaskQueue({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      return { unref() {} };
+    },
+  });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await queue.getTaskResult({ task_id: "ocq_startingrunnerpoll" });
+    assert.equal(result.error, "queued");
+    assert.equal(result.details.phase_pending, true);
+  }
+  assert.equal(spawnCount, 1);
+});
+
+test("pending polls share a runner startup guard across task queue instances", async () => {
+  const queueDir = createTempDir();
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_sharedstartingrunner",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "share runner startup" },
+  }));
+
+  let spawnCount = 0;
+  const options = {
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      return { unref() {} };
+    },
+  };
+  const firstQueue = createTaskQueue(options);
+  const secondQueue = createTaskQueue(options);
+
+  const [first, second] = await Promise.all([
+    firstQueue.getTaskResult({ task_id: "ocq_sharedstartingrunner" }),
+    secondQueue.getTaskResult({ task_id: "ocq_sharedstartingrunner" }),
+  ]);
+
+  assert.equal(first.error, "queued");
+  assert.equal(second.error, "queued");
+  assert.equal(spawnCount, 1);
+});
+
+test("a failed runner startup does not block a later pending poll", async () => {
+  const queueDir = createTempDir();
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_failedstartingrunner",
+    role: "reviewer",
+    input: { cwd: "/repo", question: "retry runner startup" },
+  }));
+
+  let spawnCount = 0;
+  const failedQueue = createTaskQueue({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      throw new Error("runner startup failed");
+    },
+  });
+  await assert.rejects(
+    failedQueue.getTaskResult({ task_id: "ocq_failedstartingrunner" }),
+    /runner startup failed/,
+  );
+
+  const retryQueue = createTaskQueue({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      return { unref() {} };
+    },
+  });
+  const result = await retryQueue.getTaskResult({ task_id: "ocq_failedstartingrunner" });
+
+  assert.equal(result.error, "queued");
+  assert.equal(result.details.phase_pending, true);
+  assert.equal(spawnCount, 2);
+});
+
+test("a stale runner startup marker permits a later pending poll to retry", async () => {
+  const queueDir = createTempDir();
+  await writeTaskFile(queueDir, createTaskFile({
+    id: "ocq_stalestartingrunner",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "retry after stale startup" },
+  }));
+
+  let spawnCount = 0;
+  const queue = createTaskQueue({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "1",
+    },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      return { unref() {} };
+    },
+  });
+
+  const first = await queue.getTaskResult({ task_id: "ocq_stalestartingrunner" });
+  assert.equal(first.error, "queued");
+  const markerPath = path.join(queueDir, "_runner.starting");
+  const staleDate = new Date(Date.now() - 1100);
+  utimesSync(markerPath, staleDate, staleDate);
+
+  const second = await queue.getTaskResult({ task_id: "ocq_stalestartingrunner" });
+  assert.equal(second.error, "queued");
+  assert.equal(spawnCount, 2);
+});
+
+test("repeated pending polls do not spawn a second runner before the first runner writes its lease", async () => {
+  const queueDir = createTempDir();
+  const task = createTaskFile({
+    id: "ocq_startupwindow",
+    role: "reviewer",
+    input: { cwd: "/repo", question: "wait for runner startup" },
+  });
+  await writeTaskFile(queueDir, task, { profile: PERSISTENCE_PROFILE });
+
+  let spawnCount = 0;
+  let firstSpawned;
+  const firstSpawnedPromise = new Promise((resolve) => {
+    firstSpawned = resolve;
+  });
+  const queue = createConfiguredTaskQueue({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCount += 1;
+      firstSpawned();
+      return { unref() {} };
+    },
+  });
+
+  const firstPoll = queue.getTaskResult({ task_id: task.id });
+  await firstSpawnedPromise;
+  const secondPoll = await queue.getTaskResult({ task_id: task.id });
+  const firstResult = await firstPoll;
+
+  assert.equal(firstResult.error, "queued");
+  assert.equal(secondPoll.error, "queued");
+  assert.equal(spawnCount, 1);
 });
 
 test("createTaskQueue returns completed reviewer results without respawning the runner", async () => {

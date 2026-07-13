@@ -295,6 +295,12 @@ async function startProviderFixture({ transport, outcome }) {
         stream: body?.stream,
         model: typeof body?.model === "string" ? body.model : null,
         reasoningEffort: body?.reasoning?.effort ?? null,
+        maxOutputTokens: body?.max_output_tokens ?? null,
+        inputIsArray: Array.isArray(body?.input),
+        includesEncryptedReasoning:
+          Array.isArray(body?.include)
+          && body.include.includes("reasoning.encrypted_content"),
+        store: body?.store,
         hasExpectedAuthorization: request.headers.authorization === `Bearer ${PROVIDER_CREDENTIAL}`,
       });
 
@@ -445,6 +451,12 @@ test("local Responses provider streams usable reviewer JSON output through an is
     assert.equal(result.ok, true);
     assert.equal(result.advisor_text.includes(fixture.successText), true);
     assertFixtureRequest(fixture, "/v1/responses");
+    const request = fixture.observations.at(-1);
+    assert.equal(Number.isInteger(request.maxOutputTokens), true);
+    assert.equal(request.maxOutputTokens > 0, true);
+    assert.equal(request.inputIsArray, true);
+    assert.equal(request.includesEncryptedReasoning, false);
+    assert.equal(request.store, false);
     assert.equal(result.advisor_text.includes(PROVIDER_CREDENTIAL), false);
     assert.equal(config.provider.transport, "responses");
   });
@@ -470,6 +482,7 @@ test("local Responses provider forwards the reviewer reasoning variant", {
     assert.equal(result.ok, true);
     assertFixtureRequest(fixture, "/v1/responses");
     assert.equal(fixture.observations.at(-1).reasoningEffort, "high");
+    assert.equal(fixture.observations.at(-1).includesEncryptedReasoning, true);
   });
 });
 

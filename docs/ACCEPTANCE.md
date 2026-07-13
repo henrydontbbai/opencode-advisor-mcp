@@ -86,7 +86,7 @@ node --test test/provider-contract.test.mjs
 
 Expected:
 
-- `responses` receives `/v1/responses` with streaming enabled; OpenCode accepts `response.output_text.delta`, `response.output_text.done`, and `response.completed` text events
+- `responses` receives `/v1/responses` with streaming enabled, an array `input`, `store: false`, and a positive integer `max_output_tokens`; reasoning-enabled requests include encrypted reasoning state, and OpenCode accepts `response.output_text.delta`, `response.output_text.done`, and `response.completed` text events
 - the local fixture observes reviewer `high` and planner `max` as separate `reasoning.effort` values for its compatible Responses model; production setup must use only values supported by its provider/model
 - a Responses `error` followed by `response.failed` fails closed without exposing the configured credential
 - `chat_completions` receives `/v1/chat/completions` with streaming enabled, standard chunks, and `[DONE]`

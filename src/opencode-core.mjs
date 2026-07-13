@@ -223,7 +223,7 @@ function stripModelReasoning(text) {
   return `${visible}${hidden.slice(headingOffset)}`;
 }
 
-function extractOpenCodeSessionId(stdout = "") {
+export function extractOpenCodeSessionId(stdout = "") {
   for (const line of String(stdout).split(/\r?\n/)) {
     try {
       const event = JSON.parse(line);
@@ -913,6 +913,7 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
 
   const model = `${profile.config.provider.id}/${profile.config.roles[role].model}`;
   const variant = profile.config.roles[role].variant;
+  const sessionTitle = deps.taskId ? `opencode-advisor:${deps.taskId}` : null;
   const commandArgs = [
     "run",
     "--pure",
@@ -925,7 +926,7 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
     cwd,
     "--format",
     "json",
-    ...(deps.taskId ? ["--title", `opencode-advisor:${deps.taskId}`] : []),
+    ...(sessionTitle ? ["--title", sessionTitle] : []),
   ];
 
   let result;
@@ -953,7 +954,20 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
   }
   const sessionId = extractOpenCodeSessionId(result.stdout);
   if (sessionId && deps.onSessionId) {
-    await deps.onSessionId(sessionId);
+    try {
+      await deps.onSessionId(sessionId, {
+        cwd,
+        title: sessionTitle,
+        observedAt: new Date().toISOString(),
+      });
+    } catch {
+      return {
+        ok: false,
+        error: "opencode_failed",
+        message: "OpenCode session ownership could not be persisted.",
+        details: {},
+      };
+    }
   }
 
   if (outputHasAgentFallback(result.stdout, result.stderr)) {

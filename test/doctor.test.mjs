@@ -90,6 +90,7 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
   let advisorDeps;
   let plannerInput;
   let plannerDeps;
+  const recordedSessions = [];
 
   const report = await runDoctor({
     cwd: WINDOWS_CHILD_REPO,
@@ -102,16 +103,36 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
     isFile: (candidate) => [firstPathCommand, secondPathCommand].includes(candidate),
     runCommand: async (command, args, options) => {
       commandCalls.push({ command, args, options });
-      return createCommandResult();
+      return createCommandResult({
+        stdout: [
+          JSON.stringify({ type: "step", sessionID: `ses_doctor_${commandCalls.length}` }),
+          JSON.stringify({ type: "text", part: { text: "OK" } }),
+        ].join("\n"),
+      });
     },
+    recordManagedSession: async (record) => recordedSessions.push(record),
     askOpenCodeAdvisorImpl: async (input, deps) => {
       advisorInput = input;
       advisorDeps = deps;
+      await deps.recordManagedSession({
+        queueDir: "unused-by-test-double",
+        sessionId: "ses_doctor_health_reviewer",
+        cwd: input.cwd,
+        title: `opencode-advisor:${deps.taskId}`,
+        observedAt: "2026-07-13T00:00:00.000Z",
+      });
       return createCanonicalSuccessPayload();
     },
     askOpenCodePlannerImpl: async (input, deps) => {
       plannerInput = input;
       plannerDeps = deps;
+      await deps.recordManagedSession({
+        queueDir: "unused-by-test-double",
+        sessionId: "ses_doctor_health_planner",
+        cwd: input.cwd,
+        title: `opencode-advisor:${deps.taskId}`,
+        observedAt: "2026-07-13T00:00:00.000Z",
+      });
       return createCanonicalPlannerSuccessPayload();
     },
   });
@@ -120,10 +141,25 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
   assert.equal(report.bucket, null);
   assert.deepEqual(commandCalls.map((call) => call.command), [firstPathCommand, firstPathCommand]);
   assert.equal(commandCalls.some((call) => call.command === "opencode"), false);
-  assert.deepEqual(commandCalls.map((call) => call.args), [
-    ["run", "--pure", "--agent", "codex-advisor", "--model", "test-provider/test-model", "--variant", "high", "--dir", WINDOWS_CHILD_REPO, "--format", "json", "Say OK only."],
-    ["run", "--pure", "--agent", "codex-planning-partner", "--model", "test-provider/test-model", "--variant", "max", "--dir", WINDOWS_CHILD_REPO, "--format", "json", "Say OK only."],
-  ]);
+  for (const [index, call] of commandCalls.entries()) {
+    assert.deepEqual(call.args.slice(0, 13), [
+      "run",
+      "--pure",
+      "--agent",
+      index === 0 ? "codex-advisor" : "codex-planning-partner",
+      "--model",
+      "test-provider/test-model",
+      "--variant",
+      index === 0 ? "high" : "max",
+      "--dir",
+      WINDOWS_CHILD_REPO,
+      "--format",
+      "json",
+      "--title",
+    ]);
+    assert.match(call.args[13], /^opencode-advisor:doctor-direct-(reviewer|planner)_[a-f0-9]{32}$/);
+    assert.equal(call.args[14], "Say OK only.");
+  }
   for (const call of commandCalls) {
     assert.equal(call.options.cwd, WINDOWS_CHILD_REPO);
     assert.equal(call.options.platform, "win32");
@@ -141,6 +177,7 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
   assert.equal(advisorDeps.platform, "win32");
   assert.equal(advisorDeps.useQueue, false);
   assert.equal(typeof advisorDeps.loadAdvisorProfile, "function");
+  assert.match(advisorDeps.taskId, /^doctor-health-reviewer_[a-f0-9]{32}$/);
   assert.deepEqual(plannerInput, {
     cwd: WINDOWS_CHILD_REPO,
     include_diff: false,
@@ -151,7 +188,57 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
   assert.equal(plannerDeps.platform, "win32");
   assert.equal(plannerDeps.useQueue, false);
   assert.equal(typeof plannerDeps.loadAdvisorProfile, "function");
+  assert.match(plannerDeps.taskId, /^doctor-health-planner_[a-f0-9]{32}$/);
+  assert.deepEqual(recordedSessions.map((record) => ({
+    sessionId: record.sessionId,
+    cwd: record.cwd,
+    title: record.title,
+  })), [
+    {
+      sessionId: "ses_doctor_1",
+      cwd: WINDOWS_CHILD_REPO,
+      title: commandCalls[0].args[13],
+    },
+    {
+      sessionId: "ses_doctor_2",
+      cwd: WINDOWS_CHILD_REPO,
+      title: commandCalls[1].args[13],
+    },
+    {
+      sessionId: "ses_doctor_health_reviewer",
+      cwd: WINDOWS_CHILD_REPO,
+      title: `opencode-advisor:${advisorDeps.taskId}`,
+    },
+    {
+      sessionId: "ses_doctor_health_planner",
+      cwd: WINDOWS_CHILD_REPO,
+      title: `opencode-advisor:${plannerDeps.taskId}`,
+    },
+  ]);
   assert.equal(report.steps.every((step) => step.ok), true);
+});
+
+test("runDoctor fails closed when direct session ownership cannot be persisted", async () => {
+  const report = await runDoctor({
+    cwd: "/repo",
+    env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
+    runCommand: async () => createCommandResult({
+      stdout: [
+        JSON.stringify({ type: "step", sessionID: "ses_doctor_unrecorded" }),
+        JSON.stringify({ type: "text", part: { text: "OK" } }),
+      ].join("\n"),
+    }),
+    recordManagedSession: async () => {
+      throw new Error("ownership storage unavailable");
+    },
+    askOpenCodeAdvisorImpl: async () => {
+      throw new Error("should not reach health check");
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.bucket, "generic_opencode_failure");
+  assert.match(report.summary, /session ownership could not be persisted/i);
 });
 
 test("runDoctor classifies missing opencode command", async () => {

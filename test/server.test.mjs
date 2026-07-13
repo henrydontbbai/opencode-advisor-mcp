@@ -18,6 +18,7 @@ import {
   truncateText,
 } from "../src/server.mjs";
 import { DEFAULT_MAX_PROCESS_OUTPUT_CHARS, runProcess } from "../src/opencode-core.mjs";
+import { listManagedSessionRecords, recordManagedSession } from "../src/session-lifecycle.mjs";
 
 const WINDOWS_ALLOWED_ROOT = "C:\\workspace\\repo-root";
 const WINDOWS_CHILD_REPO = `${WINDOWS_ALLOWED_ROOT}\\project`;
@@ -1212,8 +1213,11 @@ test("askOpenCodeAdvisor uses a trusted PATH executable before a Windows fallbac
   }
 });
 
-test("askOpenCodeAdvisor isolates queue sessions and records their internal session id", async () => {
+test("askOpenCodeAdvisor gives direct sessions managed titles and records durable ownership", async () => {
   const sessionIds = [];
+  const sessionMetadata = [];
+  let configuredRegistryQueueDir;
+  const queueDir = createTempDir("opencode-advisor-direct-");
   const { runProcess, calls } = createMockRunProcess({
     opencode: {
       code: 0,
@@ -1236,14 +1240,19 @@ test("askOpenCodeAdvisor isolates queue sessions and records their internal sess
       runProcess,
       env: {
         OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+        OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
         XDG_CONFIG_HOME: "C:\\ordinary-user\\.config",
         OPENCODE_AUTH_TOKEN: "ordinary-open-code-token",
       },
       platform: "win32",
       realpath: async (candidate) => candidate,
-      taskId: "ocq_sessionmetadata",
-      onSessionId: async (sessionId) => {
+      recordManagedSession: (record) => {
+        configuredRegistryQueueDir = record.queueDir;
+        return recordManagedSession({ ...record, queueDir });
+      },
+      onSessionId: async (sessionId, metadata) => {
         sessionIds.push(sessionId);
+        sessionMetadata.push(metadata);
       },
       useQueue: false,
     }),
@@ -1252,29 +1261,30 @@ test("askOpenCodeAdvisor isolates queue sessions and records their internal sess
   const opencodeCall = calls.find((call) => call.command === WINDOWS_MOCK_OPENCODE_COMMAND);
   assert.equal(result.ok, true);
   assert.deepEqual(sessionIds, ["ses_internal"]);
-  assert.deepEqual(
-    opencodeCall.args,
-    [
-      "run",
-      "--pure",
-      "--agent",
-      "codex-advisor",
-      "--model",
-      "test-provider/test-model",
-      "--dir",
-      WINDOWS_CHILD_REPO,
-      "--format",
-      "json",
-      "--title",
-      "opencode-advisor:ocq_sessionmetadata",
-    ],
-  );
+  const titleIndex = opencodeCall.args.indexOf("--title");
+  assert.notEqual(titleIndex, -1);
+  assert.match(opencodeCall.args[titleIndex + 1], /^opencode-advisor:direct-reviewer_[a-f0-9]{32}$/);
+  assert.deepEqual(sessionMetadata, [{
+    cwd: WINDOWS_CHILD_REPO,
+    title: opencodeCall.args[titleIndex + 1],
+    observedAt: sessionMetadata[0].observedAt,
+  }]);
+  assert.equal(Number.isFinite(Date.parse(sessionMetadata[0].observedAt)), true);
+  assert.equal(configuredRegistryQueueDir, path.win32.resolve(queueDir));
+  assert.deepEqual(await listManagedSessionRecords(queueDir), [{
+    version: 1,
+    session_id: "ses_internal",
+    cwd: WINDOWS_CHILD_REPO,
+    title: opencodeCall.args[titleIndex + 1],
+    observed_at: sessionMetadata[0].observedAt,
+  }]);
   assertIsolatedAdvisorTaskEnv(opencodeCall.options.env);
   assert.equal("session_id" in result, false);
 });
 
 test("askOpenCodeAdvisor records a started session before returning timeout", async () => {
   const sessionIds = [];
+  const queueDir = createTempDir("opencode-advisor-timeout-");
   const { runProcess, calls } = createMockRunProcess({
     opencode: {
       code: null,
@@ -1294,11 +1304,13 @@ test("askOpenCodeAdvisor records a started session before returning timeout", as
       runProcess,
       env: {
         OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+        OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
         XDG_CONFIG_HOME: "C:\\ordinary-user\\.config",
         OPENCODE_AUTH_TOKEN: "ordinary-open-code-token",
       },
       platform: "win32",
       taskId: "ocq_timeoutcleanup",
+      recordManagedSession: (record) => recordManagedSession({ ...record, queueDir }),
       onSessionId: async (sessionId) => {
         sessionIds.push(sessionId);
       },
@@ -1317,17 +1329,54 @@ test("askOpenCodeAdvisor records a started session before returning timeout", as
   assert.equal(opencodeCall.args.includes("--title"), true);
   assert.equal(opencodeCall.args.at(-1), "opencode-advisor:ocq_timeoutcleanup");
   assertIsolatedAdvisorTaskEnv(opencodeCall.options.env);
+  assert.deepEqual((await listManagedSessionRecords(queueDir)).map((record) => record.session_id), ["ses_timeoutcleanup"]);
   assert.equal("session_id" in result, false);
 });
 
+test("askOpenCodeAdvisor fails closed when direct session ownership cannot be persisted", async () => {
+  const { runProcess } = createMockRunProcess({
+    opencode: {
+      code: 0,
+      stdout: [
+        JSON.stringify({ type: "step", sessionID: "ses_unrecorded" }),
+        JSON.stringify({ type: "text", part: { text: "Looks good" } }),
+      ].join("\n"),
+      stderr: "",
+      timedOut: false,
+    },
+  });
+
+  const result = await askOpenCodeAdvisor(
+    { cwd: WINDOWS_CHILD_REPO, include_diff: false, include_status: false },
+    withMockOpenCodeCommand({
+      runProcess,
+      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+      platform: "win32",
+      realpath: async (candidate) => candidate,
+      useQueue: false,
+      recordManagedSession: async () => {
+        throw new Error("ownership storage unavailable");
+      },
+    }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "opencode_failed");
+  assert.deepEqual(result.details, {});
+});
+
 test("askOpenCodePlanner defaults to status-only context and returns planner text", async () => {
+  const queueDir = createTempDir("opencode-advisor-planner-");
   const { runProcess, calls } = createMockRunProcess({
     git: {
       "status --short": { code: 0, stdout: " M docs/plan.md\n", stderr: "", timedOut: false },
     },
     opencode: {
       code: 0,
-      stdout: JSON.stringify({ type: "text", part: { text: "Tighten scope and add validation." } }),
+      stdout: [
+        JSON.stringify({ type: "step", sessionID: "ses_directplanner" }),
+        JSON.stringify({ type: "text", part: { text: "Tighten scope and add validation." } }),
+      ].join("\n"),
       stderr: "",
       timedOut: false,
     },
@@ -1343,8 +1392,12 @@ test("askOpenCodePlanner defaults to status-only context and returns planner tex
     },
     withMockOpenCodeCommand({
       runProcess,
-      env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+      env: {
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+        OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      },
       platform: "win32",
+      recordManagedSession: (record) => recordManagedSession({ ...record, queueDir }),
       useQueue: false,
     }),
   );
@@ -1353,6 +1406,9 @@ test("askOpenCodePlanner defaults to status-only context and returns planner tex
   assert.equal(result.planner_text, "Tighten scope and add validation.");
   assert.equal(result.status, "M docs/plan.md");
   assert.equal(result.diff_truncated, false);
+  const plannerCall = calls.find((call) => call.command === WINDOWS_MOCK_OPENCODE_COMMAND);
+  assert.match(plannerCall.args[plannerCall.args.indexOf("--title") + 1], /^opencode-advisor:direct-planner_[a-f0-9]{32}$/);
+  assert.deepEqual((await listManagedSessionRecords(queueDir)).map((record) => record.session_id), ["ses_directplanner"]);
   assert.deepEqual(
     calls.filter((call) => call.command === "git").map((call) => call.args),
     [["status", "--short"]],

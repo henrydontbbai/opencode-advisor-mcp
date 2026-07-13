@@ -31,7 +31,7 @@ The Responses provider contract also covers function-call SSE (`response.functio
 
 ## Queue Boundary
 
-The server performs profile validation before `createTaskFile` is called. Therefore an unconfigured, incomplete, tampered, or binding-mismatched profile cannot create a task record. Detached queue runners receive only a reduced non-secret runtime environment and reload the profile themselves when executing a task. Session list/delete maintenance uses the same isolated profile paths but never injects the provider credential. The profile and queue form a local single-user boundary, not a multi-tenant storage system.
+The server performs profile validation before `createTaskFile` is called. Therefore an unconfigured, incomplete, tampered, or binding-mismatched profile cannot create a task record. Detached queue runners receive only a reduced non-secret runtime environment and reload the profile themselves when executing a task. Queue, direct, and doctor calls persist minimal session ownership records under the private queue directory. Maintenance deletes only exact recorded session IDs through the isolated profile environment, never injects the provider credential, and never scans or mutates ordinary OpenCode sessions. The profile and queue form a local single-user boundary, not a multi-tenant storage system.
 
 Queue task JSON retains input, task state, and result metadata only. It never stores profile contents, provider model data, provider URL, or a credential.
 

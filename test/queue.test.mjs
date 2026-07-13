@@ -17,6 +17,7 @@ import {
   writeTaskFile,
 } from "../src/task-queue.mjs";
 import { SETUP_GUIDANCE } from "../src/provider-profile.mjs";
+import { listManagedSessionRecords, recordManagedSession } from "../src/session-lifecycle.mjs";
 
 const tempDirs = new Set();
 
@@ -230,9 +231,94 @@ test("processQueueOnce saves a session id without exposing it in the public resu
   const saved = await readTaskFile(queueDir, task.id);
   assert.equal(saved.session_id, "ses_queueinternal");
   assert.equal("session_id" in saved.result, false);
+  assert.deepEqual(await listManagedSessionRecords(queueDir), [{
+    version: 1,
+    session_id: "ses_queueinternal",
+    cwd: "/repo",
+    title: "opencode-advisor:ocq_sessiontask",
+    observed_at: (await listManagedSessionRecords(queueDir))[0].observed_at,
+  }]);
 });
 
-test("runQueueMaintenance uses an isolated credential-free profile environment for expired sessions", async () => {
+for (const failure of [
+  {
+    name: "timeout",
+    result: {
+      ok: false,
+      error: "timeout",
+      message: "OpenCode advisor timed out.",
+      details: {},
+    },
+    expectedStatus: "timeout",
+  },
+  {
+    name: "nonzero result",
+    result: {
+      ok: false,
+      error: "opencode_failed",
+      message: "OpenCode exited with code 1.",
+      details: { opencode_exit_code: 1 },
+    },
+    expectedStatus: "failed",
+  },
+]) {
+  test(`processQueueOnce records session ownership before a ${failure.name}`, async () => {
+    const queueDir = createTempDir();
+    const task = createTaskFile({
+      id: `ocq_${failure.expectedStatus}session`,
+      role: "reviewer",
+      input: { cwd: "/repo", question: "retain failed session" },
+    });
+    await writeTaskFile(queueDir, task);
+
+    await processQueueOnce({
+      queueDir,
+      config: getQueueConfig({}, process.platform),
+      runnerId: `runner_${failure.expectedStatus}session`,
+      runTask: async (_claimedTask, { onSessionId }) => {
+        await onSessionId(`ses_${failure.expectedStatus}`);
+        return failure.result;
+      },
+    });
+
+    const saved = await readTaskFile(queueDir, task.id);
+    assert.equal(saved.status, failure.expectedStatus);
+    assert.equal(saved.session_id, `ses_${failure.expectedStatus}`);
+    assert.deepEqual((await listManagedSessionRecords(queueDir)).map((record) => record.session_id), [
+      `ses_${failure.expectedStatus}`,
+    ]);
+  });
+}
+
+test("processQueueOnce fails closed while retaining task evidence when ownership persistence fails", async () => {
+  const queueDir = createTempDir();
+  const task = createTaskFile({
+    id: "ocq_ownershipfailure",
+    role: "planner",
+    input: { cwd: "/repo", current_plan: "retain task evidence" },
+  });
+  await writeTaskFile(queueDir, task);
+  await fs.writeFile(path.join(queueDir, "_sessions"), "blocks session directory creation");
+
+  await processQueueOnce({
+    queueDir,
+    config: getQueueConfig({}, process.platform),
+    runnerId: "runner_ownershipfailure",
+    runTask: async (_claimedTask, { onSessionId }) => {
+      await onSessionId("ses_ownershipfailure");
+      return successfulTaskResult(task);
+    },
+  });
+
+  const saved = await readTaskFile(queueDir, task.id);
+  assert.equal(saved.status, "failed");
+  assert.equal(saved.session_id, "ses_ownershipfailure");
+  assert.equal(saved.result.ok, false);
+  assert.equal(saved.result.error, "opencode_failed");
+  assert.equal(saved.result.details.status, undefined);
+});
+
+test("runQueueMaintenance deletes owned sessions before their task evidence using an isolated credential-free environment", async () => {
   const queueDir = createTempDir();
   const now = Date.now();
   const profile = createMaintenanceProfile();
@@ -245,6 +331,7 @@ test("runQueueMaintenance uses an isolated credential-free profile environment f
     }),
     status: "completed",
     completed_at: new Date(now - 7000).toISOString(),
+    session_id: "ses_expired",
     result: successfulTaskResult({ role: "reviewer" }),
   };
   await writeTaskFile(queueDir, expiredTask);
@@ -260,6 +347,13 @@ test("runQueueMaintenance uses an isolated credential-free profile environment f
     result: successfulTaskResult({ role: "reviewer" }),
   };
   await writeTaskFile(queueDir, retainedTask, { profile });
+  await recordManagedSession({
+    queueDir,
+    sessionId: "ses_fresh",
+    cwd: "/repo/fresh",
+    title: "opencode-advisor:ocq_fresh",
+    observedAt: new Date(now).toISOString(),
+  });
 
   const commands = [];
   const env = {
@@ -287,29 +381,7 @@ test("runQueueMaintenance uses an isolated credential-free profile environment f
     now,
     runSessionCommand: async (command, args, options) => {
       commands.push({ command, args, options });
-      if (args[1] === "list") {
-        return {
-          code: 0,
-          stdout: JSON.stringify([
-            {
-              id: "ses_expired",
-              title: "opencode-advisor:ocq_retainedtask",
-              updated: now - 7000,
-            },
-            {
-              id: "ses_unmanaged",
-              title: "normal user session",
-              updated: now - 7000,
-            },
-            {
-              id: "ses_fresh",
-              title: "opencode-advisor:ocq_fresh",
-              updated: now,
-            },
-          ]),
-          stderr: "",
-        };
-      }
+      assert.notEqual(await readTaskFile(queueDir, expiredTask.id), null);
       return { code: 0, stdout: "", stderr: "" };
     },
   });
@@ -318,21 +390,163 @@ test("runQueueMaintenance uses an isolated credential-free profile environment f
   assert.deepEqual(
     commands.map((command) => command.args),
     [
-      ["session", "list", "--format", "json"],
-      ["session", "delete", "ses_expired"],
+      ["session", "delete", "ses_expired", "--pure"],
     ],
   );
-  assert.equal(commands[1].command, commands[0].command);
-  assert.equal(commands[1].options, commands[0].options);
-  assert.equal(commands[0].options.cwd, profile.paths.home);
+  assert.equal(commands[0].options.cwd, "/repo");
   assert.equal(commands[0].options.env.XDG_CONFIG_HOME, profile.paths.configHome);
   assert.equal(commands[0].options.env.XDG_DATA_HOME, profile.paths.dataHome);
   assert.equal(commands[0].options.env.OPENCODE_CONFIG, profile.paths.opencodeConfigPath);
   assert.equal(commands[0].options.env.OPENAI_API_KEY, undefined);
   assert.equal(commands[0].options.env.OPENCODE_ADVISOR_PROVIDER_KEY, undefined);
   assert.equal(commands[0].options.env.OPENCODE_CONFIG_CONTENT.includes(profile.credential), false);
+  assert.deepEqual((await listManagedSessionRecords(queueDir)).map((record) => record.session_id), ["ses_fresh"]);
   assert.equal(JSON.stringify(await readTaskFile(queueDir, retainedTask.id)).includes(profile.paths.home), false);
   assertNoPersistedProfileValues(await readTaskFile(queueDir, retainedTask.id));
+});
+
+test("runQueueMaintenance deletes more than one hundred owned sessions without listing OpenCode sessions", async () => {
+  const queueDir = createTempDir();
+  const now = Date.now();
+  const profile = createMaintenanceProfile();
+  for (let index = 0; index < 105; index += 1) {
+    await recordManagedSession({
+      queueDir,
+      sessionId: `ses_owned_${index}`,
+      cwd: `/repo/${index}`,
+      title: `opencode-advisor:direct_${index}`,
+      observedAt: new Date(now - 7000).toISOString(),
+    });
+  }
+
+  const commands = [];
+  await runQueueMaintenance({
+    queueDir,
+    config: {
+      ...getQueueConfig({
+        OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
+        OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
+      }, "linux"),
+      queueDir,
+      env: { PATH: "/safe/bin", OPENCODE_ADVISOR_OPENCODE_CMD: "opencode" },
+      platform: "linux",
+    },
+    profile,
+    now,
+    runSessionCommand: async (command, args, options) => {
+      commands.push({ command, args, options });
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  assert.equal(commands.length, 105);
+  assert.equal(commands.every((call) => call.args[0] === "session" && call.args[1] === "delete"), true);
+  assert.equal(commands.some((call) => call.args.includes("list")), false);
+  assert.equal(commands.every((call) => call.args.at(-1) === "--pure"), true);
+  assert.deepEqual(await listManagedSessionRecords(queueDir), []);
+});
+
+test("runQueueMaintenance retains ownership records after delete failures and retries them later", async () => {
+  const queueDir = createTempDir();
+  const now = Date.now();
+  const profile = createMaintenanceProfile();
+  await writeTaskFile(queueDir, {
+    ...createTaskFile({
+      id: "ocq_faileddelete",
+      role: "reviewer",
+      input: { cwd: "/repo", question: "retry session cleanup" },
+      now: now - 7000,
+    }),
+    status: "completed",
+    updated_at: new Date(now - 7000).toISOString(),
+    completed_at: new Date(now - 7000).toISOString(),
+    session_id: "ses_nonzero",
+    result: successfulTaskResult({ role: "reviewer" }),
+  });
+  for (const sessionId of ["ses_nonzero", "ses_throwing"]) {
+    await recordManagedSession({
+      queueDir,
+      sessionId,
+      cwd: "/repo",
+      title: `opencode-advisor:${sessionId}`,
+      observedAt: new Date(now - 7000).toISOString(),
+    });
+  }
+
+  const config = {
+    ...getQueueConfig({
+      OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
+      OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
+    }, "linux"),
+    queueDir,
+    env: { PATH: "/safe/bin", OPENCODE_ADVISOR_OPENCODE_CMD: "opencode" },
+    platform: "linux",
+  };
+  await runQueueMaintenance({
+    queueDir,
+    config,
+    profile,
+    now,
+    runSessionCommand: async (_command, args) => {
+      if (args.includes("ses_throwing")) throw new Error("cwd is unavailable");
+      return { code: 1, stdout: "", stderr: "delete failed" };
+    },
+  });
+  assert.deepEqual(
+    (await listManagedSessionRecords(queueDir)).map((record) => record.session_id).sort(),
+    ["ses_nonzero", "ses_throwing"],
+  );
+  assert.equal("session_id" in await readTaskFile(queueDir, "ocq_faileddelete"), false);
+
+  await runQueueMaintenance({
+    queueDir,
+    config,
+    profile,
+    now: now + 2,
+    runSessionCommand: async () => ({ code: 0, stdout: "", stderr: "" }),
+  });
+  assert.deepEqual(await listManagedSessionRecords(queueDir), []);
+});
+
+test("runQueueMaintenance does not recreate deleted session ownership from retained tasks", async () => {
+  const queueDir = createTempDir();
+  const now = Date.now();
+  const profile = createMaintenanceProfile();
+  const task = {
+    ...createTaskFile({
+      id: "ocq_deletedownership",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "retain task result" },
+      now: now - 4 * 24 * 60 * 60 * 1000,
+    }),
+    status: "completed",
+    updated_at: new Date(now - 4 * 24 * 60 * 60 * 1000).toISOString(),
+    completed_at: new Date(now - 4 * 24 * 60 * 60 * 1000).toISOString(),
+    session_id: "ses_deleteonce",
+    result: successfulTaskResult({ role: "planner" }),
+  };
+  await writeTaskFile(queueDir, task);
+
+  const config = {
+    ...getQueueConfig({ OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1" }, "linux"),
+    queueDir,
+    env: { PATH: "/safe/bin", OPENCODE_ADVISOR_OPENCODE_CMD: "opencode" },
+    platform: "linux",
+  };
+  const deletes = [];
+  const runSessionCommand = async (_command, args) => {
+    deletes.push(args);
+    return { code: 0, stdout: "", stderr: "" };
+  };
+
+  await runQueueMaintenance({ queueDir, config, profile, now, runSessionCommand });
+  await runQueueMaintenance({ queueDir, config, profile, now: now + 2, runSessionCommand });
+
+  assert.deepEqual(deletes, [["session", "delete", "ses_deleteonce", "--pure"]]);
+  const retainedTask = await readTaskFile(queueDir, task.id);
+  assert.notEqual(retainedTask, null);
+  assert.equal("session_id" in retainedTask, false);
+  assert.deepEqual(await listManagedSessionRecords(queueDir), []);
 });
 
 test("runQueueRunner repeats maintenance while it remains alive", async () => {

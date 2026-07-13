@@ -5,6 +5,7 @@ const TEST_FILES = [
   "test/server.test.mjs",
   "test/runtime-shared.test.mjs",
   "test/package-contract.test.mjs",
+  "test/session-lifecycle.test.mjs",
   "test/queue.test.mjs",
   "test/mcp-integration.test.mjs",
   "test/queue-integration.test.mjs",

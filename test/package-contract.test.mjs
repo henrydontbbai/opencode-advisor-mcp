@@ -338,6 +338,7 @@ test("real tarball contents stay aligned with the published package contract", (
     "src/queue-runner.mjs",
     "src/runtime-shared.mjs",
     "src/server.mjs",
+    "src/session-lifecycle.mjs",
     "src/task-queue.mjs",
   ]);
 
@@ -350,6 +351,7 @@ test("real tarball contents stay aligned with the published package contract", (
     "docs/CONFIGURATION.md",
     "examples/codex-mcp.toml",
     "src/server.mjs",
+    "src/session-lifecycle.mjs",
     "README.md",
     "LICENSE",
     "package.json",

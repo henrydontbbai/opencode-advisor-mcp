@@ -7,12 +7,21 @@ import {
   DEFAULT_TIMEOUT_MS,
   createPlannerSuccessResponse,
   createSuccessResponse,
-  getOpencodeFallbackCommands,
+  isProcessLaunchError,
+  markProcessLaunchError,
   outputHasAgentFallback,
+  outputHasStructuredAssistantText,
   pathForPlatform,
   positiveNumber,
-  resolveOpencodeCommand,
+  resolveOpencodeCommands,
 } from "./runtime-shared.mjs";
+import {
+  buildOpenCodeChildEnv,
+  loadAdvisorProfile,
+  redactAdvisorProviderText,
+  redactAdvisorProviderValue,
+  SETUP_GUIDANCE,
+} from "./provider-profile.mjs";
 
 export const INVALID_CWD_MESSAGE = "cwd is outside configured allowed roots";
 export const GIT_FAILED_MESSAGE = "Git context collection failed";
@@ -72,20 +81,6 @@ export function parseAllowedRoots(input, env = process.env, pathApi = path) {
       }
       return pathApi.resolve(entry);
     });
-}
-
-export function getOpenCodeDataHome(env = process.env, pathApi = path) {
-  const configured = env.OPENCODE_ADVISOR_OPENCODE_DATA_HOME;
-  if (typeof configured !== "string" || !configured.trim()) {
-    throw new Error("OPENCODE_ADVISOR_OPENCODE_DATA_HOME must be configured before the MCP server starts.");
-  }
-  if (configured.includes("\0")) {
-    throw new Error("OPENCODE_ADVISOR_OPENCODE_DATA_HOME must not contain NUL bytes.");
-  }
-  if (!pathApi.isAbsolute(configured)) {
-    throw new Error("OPENCODE_ADVISOR_OPENCODE_DATA_HOME must be an absolute path.");
-  }
-  return pathApi.resolve(configured);
 }
 
 export function isPathInsideAllowedRoots(candidate, allowedRoots = parseAllowedRoots(), pathApi = path) {
@@ -270,10 +265,6 @@ function appendOutput(output, chunk, maxChars = DEFAULT_MAX_PROCESS_OUTPUT_CHARS
   };
 }
 
-function isSpawnError(error) {
-  return /ENOENT|not recognized/i.test(String(error?.code || error?.message || error));
-}
-
 function terminateProcessTree(child, platform, terminationSpawnImpl) {
   if (!Number.isInteger(child.pid)) {
     try {
@@ -359,15 +350,20 @@ export function runProcess(
   } = {},
 ) {
   return new Promise((resolve, reject) => {
-    const needsShell = platform === "win32" && /\.(cmd|bat)$/i.test(command);
-    const child = spawnImpl(command, args, {
-      cwd,
-      env,
-      shell: needsShell,
-      detached: platform !== "win32",
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    let child;
+    try {
+      child = spawnImpl(command, args, {
+        cwd,
+        env,
+        shell: false,
+        detached: platform !== "win32",
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      reject(markProcessLaunchError(error));
+      return;
+    }
 
     let stdout = "";
     let stderr = "";
@@ -379,6 +375,7 @@ export function runProcess(
     let settlementRequested = false;
     let streamsFlushed = false;
     let terminationPromise;
+    let childSpawned = false;
     const flushStreams = () => {
       if (streamsFlushed) return;
       streamsFlushed = true;
@@ -418,6 +415,9 @@ export function runProcess(
       settle(resolve, () => createResult(null));
     }, timeoutMs);
 
+    child.once("spawn", () => {
+      childSpawned = true;
+    });
     child.stdout.on("data", (chunk) => {
       const output = appendOutput(stdout, stdoutDecoder.write(chunk), maxOutputChars);
       stdout = output.text;
@@ -439,7 +439,7 @@ export function runProcess(
       settle(reject, () => error);
     });
     child.on("error", (error) => {
-      settle(reject, () => error);
+      settle(reject, () => childSpawned ? error : markProcessLaunchError(error));
     });
     child.on("close", (code) => {
       settle(resolve, () => createResult(code));
@@ -631,26 +631,27 @@ Return concise Markdown with these sections:
 You are a planning partner, not the final owner of the plan. Tighten and improve the existing direction instead of replacing it wholesale.`;
 }
 
-function getRoleDefaults(role) {
-  if (role === "planner") {
-    return {
-      agentName: "codex-planning-partner",
-      defaultIncludeDiff: false,
-      defaultIncludeStatus: true,
-      promptBuilder: buildPlannerPrompt,
-      successBuilder: createPlannerSuccessResponse,
-      successTextKey: "plannerText",
-    };
-  }
-
-  return {
+const ROLE_REGISTRY = Object.freeze({
+  reviewer: Object.freeze({
     agentName: "codex-advisor",
     defaultIncludeDiff: true,
     defaultIncludeStatus: true,
     promptBuilder: buildAdvisorPrompt,
     successBuilder: createSuccessResponse,
     successTextKey: "advisorText",
-  };
+  }),
+  planner: Object.freeze({
+    agentName: "codex-planning-partner",
+    defaultIncludeDiff: false,
+    defaultIncludeStatus: true,
+    promptBuilder: buildPlannerPrompt,
+    successBuilder: createPlannerSuccessResponse,
+    successTextKey: "plannerText",
+  }),
+});
+
+function getRoleDefaults(role) {
+  return ROLE_REGISTRY[role] ?? null;
 }
 
 function buildRuntime(deps = {}) {
@@ -659,6 +660,8 @@ function buildRuntime(deps = {}) {
     env: deps.env ?? process.env,
     platform: deps.platform ?? process.platform,
     existsSync: deps.existsSync ?? existsSync,
+    isFile: deps.isFile ?? deps.runProcess?.isFile,
+    loadAdvisorProfile: deps.loadAdvisorProfile ?? deps.runProcess?.loadAdvisorProfile ?? loadAdvisorProfile,
   };
   runtime.path = deps.path ?? pathForPlatform(runtime.platform);
   runtime.realpath = deps.realpath
@@ -694,6 +697,15 @@ async function canonicalizeAllowedCwd(cwd, allowedRoots, runtime) {
 export async function preflightOpenCodeTask(role, input = {}, deps = {}) {
   const runtime = buildRuntime(deps);
   const roleDefaults = getRoleDefaults(role);
+  if (!roleDefaults) {
+    return {
+      ok: false,
+      error: "opencode_failed",
+      message: "OpenCode Advisor role is not supported.",
+      details: {},
+    };
+  }
+
   const limitMessage = inputLimitMessage(input);
   if (limitMessage) {
     return {
@@ -740,30 +752,39 @@ export async function preflightOpenCodeTask(role, input = {}, deps = {}) {
     };
   }
 
-  let opencodeDataHome = null;
-  try {
-    opencodeDataHome = getOpenCodeDataHome(runtime.env, runtime.path);
-  } catch (error) {
-    if (deps.runProcess) {
-      opencodeDataHome = null;
-    } else {
-      return {
-        ok: false,
-        error: "opencode_failed",
-        message: error.message,
-        details: {},
-      };
-    }
-  }
-
   const cwd = runtime.path.resolve(requestedCwd);
-  const allowedRoots = parseAllowedRoots(undefined, runtime.env, runtime.path);
+  let allowedRoots;
+  try {
+    allowedRoots = parseAllowedRoots(undefined, runtime.env, runtime.path);
+  } catch {
+    return {
+      ok: false,
+      error: "invalid_cwd",
+      message: INVALID_CWD_MESSAGE,
+      details: {},
+    };
+  }
   const canonicalCwd = await canonicalizeAllowedCwd(cwd, allowedRoots, runtime);
   if (!canonicalCwd) {
     return {
       ok: false,
       error: "invalid_cwd",
       message: INVALID_CWD_MESSAGE,
+      details: {},
+    };
+  }
+
+  let profile;
+  try {
+    profile = await runtime.loadAdvisorProfile({
+      env: runtime.env,
+      platform: runtime.platform,
+    });
+  } catch {
+    return {
+      ok: false,
+      error: "opencode_failed",
+      message: SETUP_GUIDANCE,
       details: {},
     };
   }
@@ -778,13 +799,13 @@ export async function preflightOpenCodeTask(role, input = {}, deps = {}) {
       includeDiff,
       baseRef,
       paths,
+      profile,
       timeoutMs: positiveNumber(runtime.env.OPENCODE_ADVISOR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
       maxDiffChars: boundedPositiveNumber(
         input.max_diff_chars ?? runtime.env.OPENCODE_ADVISOR_MAX_DIFF_CHARS,
         DEFAULT_MAX_DIFF_CHARS,
         INPUT_LIMITS.maxDiffChars,
       ),
-      opencodeDataHome,
     },
   };
 }
@@ -805,7 +826,7 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
     paths,
     timeoutMs,
     maxDiffChars,
-    opencodeDataHome,
+    profile,
   } = preflight.normalized;
 
   let context;
@@ -820,25 +841,33 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
     };
   }
 
+  context = {
+    ...context,
+    status: redactAdvisorProviderText(context.status, profile),
+    diff: redactAdvisorProviderText(context.diff, profile),
+  };
+  const sanitizedInput = redactAdvisorProviderValue(input, profile);
+
   const prompt = roleDefaults.promptBuilder({
-    question: input.question,
-    goal: input.goal,
+    question: sanitizedInput.question,
+    goal: sanitizedInput.goal,
     cwd,
     status: context.status,
     diff: context.diff,
     diffTruncated: context.diffTruncated,
-    currentPlan: input.current_plan,
-    constraints: input.constraints,
+    currentPlan: sanitizedInput.current_plan,
+    constraints: sanitizedInput.constraints,
     paths,
   });
 
   const configuredCommand = runtime.env.OPENCODE_ADVISOR_OPENCODE_CMD || "opencode";
-  let opencodeCommand;
+  let commands;
   try {
-    opencodeCommand = resolveOpencodeCommand(configuredCommand, {
+    commands = resolveOpencodeCommands(configuredCommand, {
       env: runtime.env,
       platform: runtime.platform,
       exists: runtime.existsSync,
+      isFile: runtime.isFile,
     });
   } catch (error) {
     return {
@@ -848,15 +877,48 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
       details: {},
     };
   }
-  const commands = [
-    opencodeCommand,
-    ...(configuredCommand === "opencode"
-      ? getOpencodeFallbackCommands({
-        env: runtime.env,
-        platform: runtime.platform,
-        exists: runtime.existsSync,
-      }).filter((command) => command !== opencodeCommand)
-      : []),
+  if (commands.length === 0) {
+    return {
+      ok: false,
+      error: "opencode_not_found",
+      message: OPENCODE_NOT_FOUND_MESSAGE,
+      details: {},
+    };
+  }
+
+  let childEnv;
+  try {
+    childEnv = buildOpenCodeChildEnv({
+      config: profile.config,
+      paths: profile.paths,
+      credential: profile.credential,
+      env: runtime.env,
+      platform: runtime.platform,
+    });
+  } catch {
+    return {
+      ok: false,
+      error: "opencode_failed",
+      message: SETUP_GUIDANCE,
+      details: {},
+    };
+  }
+
+  const model = `${profile.config.provider.id}/${profile.config.roles[role].model}`;
+  const variant = profile.config.roles[role].variant;
+  const commandArgs = [
+    "run",
+    "--pure",
+    "--agent",
+    roleDefaults.agentName,
+    "--model",
+    model,
+    ...(variant ? ["--variant", variant] : []),
+    "--dir",
+    cwd,
+    "--format",
+    "json",
+    ...(deps.taskId ? ["--title", `opencode-advisor:${deps.taskId}`] : []),
   ];
 
   let result;
@@ -865,44 +927,23 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
     try {
       result = await runtime.runProcess(
         command,
-        [
-          "run",
-          "--agent",
-          roleDefaults.agentName,
-          "--dir",
-          cwd,
-          "--format",
-          "json",
-          ...(deps.taskId ? ["--title", `opencode-advisor:${deps.taskId}`] : []),
-        ],
-        {
-          cwd,
-          input: prompt,
-          timeoutMs,
-          env: opencodeDataHome
-            ? { ...runtime.env, XDG_DATA_HOME: opencodeDataHome }
-            : runtime.env,
-          platform: runtime.platform,
-        },
+        commandArgs,
+        { cwd, input: prompt, timeoutMs, env: childEnv, platform: runtime.platform },
       );
       break;
     } catch (error) {
       spawnError = error;
-      if (!isSpawnError(error) || command === commands.at(-1)) {
-        break;
-      }
+      if (!isProcessLaunchError(error) || command === commands.at(-1)) break;
     }
   }
-
   if (!result) {
     return {
       ok: false,
-      error: isSpawnError(spawnError) ? "opencode_not_found" : "opencode_failed",
-      message: isSpawnError(spawnError) ? OPENCODE_NOT_FOUND_MESSAGE : "OpenCode process failed during execution.",
+      error: isProcessLaunchError(spawnError) ? "opencode_not_found" : "opencode_failed",
+      message: isProcessLaunchError(spawnError) ? OPENCODE_NOT_FOUND_MESSAGE : "OpenCode process failed during execution.",
       details: {},
     };
   }
-
   const sessionId = extractOpenCodeSessionId(result.stdout);
   if (sessionId && deps.onSessionId) {
     await deps.onSessionId(sessionId);
@@ -944,7 +985,16 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
     };
   }
 
-  const text = extractOpenCodeText(result.stdout);
+  if (!outputHasStructuredAssistantText(result.stdout)) {
+    return {
+      ok: false,
+      error: "opencode_failed",
+      message: "OpenCode returned no structured assistant output.",
+      details: {},
+    };
+  }
+
+  const text = redactAdvisorProviderText(extractOpenCodeText(result.stdout), profile);
   return roleDefaults.successBuilder({
     baseRef,
     status: context.status,

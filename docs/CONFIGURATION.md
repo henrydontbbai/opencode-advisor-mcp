@@ -1,62 +1,82 @@
-# Configuration Reference
+# Configuration
 
-All runtime configuration uses environment variables. Values ending in `_MS` are milliseconds. Invalid non-positive numeric values fall back to the documented default.
+## Independent Provider Profile
 
-## Required runtime settings
+Run `opencode-advisor-setup` in an interactive terminal to create or replace the Advisor profile. It is the only supported place to configure a third-party provider URL, transport, model list, role-model mapping, or API key. Setup does not import normal OpenCode, Codex, or Cockpit configuration, credentials, or account-login state.
 
-| Variable | Default | Meaning and safety notes |
-| --- | --- | --- |
-| `OPENCODE_ADVISOR_ALLOWED_ROOTS` | none; required | Semicolon-separated absolute roots that may be reviewed. Keep this narrow. A Windows root containing `;` must be quoted. |
-| `OPENCODE_ADVISOR_OPENCODE_DATA_HOME` | none; required | Absolute dedicated OpenCode data directory used as the child process `XDG_DATA_HOME`. Initialize its authentication yourself with `opencode auth login`; never copy the normal OpenCode database, credentials, or WAL files. |
+The non-secret manifest has this fixed shape:
 
-## OpenCode and Git execution
+```json
+{
+  "version": 1,
+  "provider": {
+    "id": "third-party",
+    "name": "Third Party",
+    "base_url": "https://models.example.test/v1",
+    "transport": "responses",
+    "models": [{ "id": "reasoning-model", "name": "Reasoning Model" }]
+  },
+  "roles": {
+    "reviewer": { "model": "reasoning-model", "variant": "high" },
+    "planner": { "model": "reasoning-model", "variant": "max" }
+  }
+}
+```
 
-| Variable | Default | Meaning and when to change it |
-| --- | --- | --- |
-| `OPENCODE_ADVISOR_OPENCODE_CMD` | `opencode` from `PATH` | Optional absolute executable override. On Windows it must be an existing `.exe`; it is not a shell command or argument string. Leave unset unless `PATH` cannot find OpenCode. |
-| `OPENCODE_ADVISOR_TIMEOUT_MS` | `300000` | Per-task OpenCode timeout. Increase only for known slow provider runs; keep Codex `tool_timeout_sec` larger. |
-| `OPENCODE_ADVISOR_GIT_TIMEOUT_MS` | `30000` | Timeout for Git status/diff collection only. Increase for very large repositories without increasing provider time. |
-| `OPENCODE_ADVISOR_MAX_DIFF_CHARS` | `60000` | Maximum diff context passed to OpenCode. Request input cannot exceed `1000000`; smaller limits reduce prompt size. |
-| `OPENCODE_ADVISOR_REDACT_SECRETS` | enabled | Best-effort diff redaction. Set only to `0`, `false`, `off`, or `no` to disable it; disabling does not make a repository safer. |
+`base_url` must be an HTTP or HTTPS API root without embedded credentials, query parameters, fragments, or control characters. `transport` is exactly `responses` or `chat_completions`.
 
-## Queue settings
+`roles.reviewer.variant` and `roles.planner.variant` are optional, independent OpenCode model variants. Omit a `variant` to use the selected model's default. Reviewer `high` and planner `max` are an example even when both roles use the same model; they are not values guaranteed by every provider or model.
 
-The queue is local state, not encrypted multi-user storage. Its default directory is `%USERPROFILE%\.codex\opencode-advisor\queue` on Windows and `$HOME/.codex/opencode-advisor/queue` elsewhere.
+Windows uses `%USERPROFILE%\.codex\opencode-advisor` by default. POSIX uses `$HOME/.codex/opencode-advisor`. Set `OPENCODE_ADVISOR_HOME` to an absolute path before setup only when a different private profile location is required. This path is not a provider credential and may be present in a local shell, but it does not belong in shared MCP configuration unless all users intentionally share that same local profile location.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `OPENCODE_ADVISOR_QUEUE_DIR` | platform default | Direct queue directory override. |
-| `OPENCODE_ADVISOR_QUEUE_LOG_DIR` | unset | Directory for detached runner stdout/stderr used in local diagnosis. |
-| `OPENCODE_ADVISOR_CONCURRENCY_GLOBAL` | `4` | Maximum combined runner concurrency. |
-| `OPENCODE_ADVISOR_CONCURRENCY_PLANNER` | `2` | Planner concurrency within the global limit. |
-| `OPENCODE_ADVISOR_CONCURRENCY_REVIEWER` | `2` | Reviewer concurrency within the global limit. |
-| `OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS` | `60000` | How long an ask tool waits before returning a pending `queued` response. |
-| `OPENCODE_ADVISOR_QUEUE_RETRY_AFTER_MS` | `30000` | Polling hint returned with a pending result. |
-| `OPENCODE_ADVISOR_QUEUE_MAX_PENDING` | `16` | Maximum pending tasks accepted by the local queue. |
-| `OPENCODE_ADVISOR_TASK_TTL_MS` | `86400000` | Maximum task lifetime before a non-terminal task becomes expired. |
-| `OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS` | `15000` | Idle delay before a detached runner exits. |
-| `OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS` | safety floor | Lease age after which an inactive runner can be recovered. Default is at least `420000` and at least `OPENCODE_ADVISOR_TIMEOUT_MS + 120000`. |
-| `OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS` | runner stale value | Separate stale threshold for a running task. Override only when its recovery semantics are understood. |
-| `OPENCODE_ADVISOR_QUEUE_POLL_MS` | `1000` | Runner loop interval. Lower values add filesystem churn. |
+The profile contains isolated `opencode-config`, `opencode-data`, `opencode-cache`, `opencode-state`, agent templates, a non-secret manifest, and a credential file. It never imports normal OpenCode, Codex, or Cockpit provider configuration.
 
-## Session lifecycle and maintenance
+On Windows, the credential uses CurrentUser DPAPI through a fixed PowerShell helper. On POSIX, storage falls back to filesystem permissions: private profile directories use `0700`, the credential file uses `0600`, and the credential envelope is Base64-encoded rather than encrypted with a DPAPI-equivalent keystore. Where POSIX permission enforcement is available, unsafe ownership, modes, symlinks, and file types cause profile loading to fail.
 
-These settings apply only to the dedicated profile, never to the user's regular OpenCode data directory.
+The credential is bound to the exact validated manifest fingerprint, and the generated OpenCode overlay must exactly match the manifest. A missing credential, incomplete profile write, stale overlay, modified manifest, or binding mismatch is setup-required and fails closed before task submission. A setup cancelled before profile writing leaves a prior valid profile intact. Do not hand-edit profile artifacts; rerun `opencode-advisor-setup`.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `OPENCODE_ADVISOR_SESSION_RETENTION_MS` | `259200000` (3 days) | Retain advisor-created OpenCode sessions for diagnosis, then delete managed sessions by title and age. |
-| `OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS` | `604800000` (7 days) | Retain terminal `completed`, `failed`, `expired`, and `timeout` task records. |
-| `OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS` | `21600000` (6 hours) | Minimum interval between runner maintenance passes. Failed cleanup is retried later. |
+## Transport Compatibility
 
-Maintenance does not delete the user's normal OpenCode sessions, access the normal SQLite database, or run automatic `VACUUM`.
+`responses` maps to `@ai-sdk/openai` and OpenCode's Responses API streaming path. For a provider/model that supports a selected role variant, the generated OpenCode model variant sets `reasoningEffort` and the Responses request carries the matching `reasoning.effort`. The local compatibility fixture expects `POST /v1/responses` with `stream: true`, output-text SSE events (`response.output_text.delta`, `response.output_text.done`, `response.completed`), and failure SSE (`error`, `response.failed`). Errors fail the request rather than becoming an MCP answer.
 
-## Developer-only setting
+`chat_completions` maps to `@ai-sdk/openai-compatible` and expects `POST /v1/chat/completions` with `stream: true`, standard completion chunks, and `[DONE]`. OpenCode owns this HTTP/SSE processing; the MCP server does not proxy or expose raw provider events.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `OPENCODE_ADVISOR_TEST_FILE_TIMEOUT_MS` | `120000` | Per-file timeout used by the repository test runner. Do not place it in production MCP configuration. |
+The two built-in agent templates deny all tools. The Responses fixture also covers function-call SSE, but it is not an MCP capability or assistant result: the built-in agent leaves the call unexecuted and the request ends at the configured OpenCode timeout (the fixture uses a short timeout). No configuration may enable agent file, shell, web, or subagent tools, and this path is not a successful tool round-trip.
 
-## Input limits
+## MCP Environment
 
-The service rejects oversized request input before it writes a queue task or launches Git/OpenCode. Limits are UTF-8 bytes unless stated otherwise: `cwd` 4 KiB; `question` and `goal` 16 KiB each; `current_plan` 64 KiB; each constraint 2 KiB with at most 32; each path 1 KiB with at most 128; `base_ref` 256 bytes; `max_diff_chars` at most 1,000,000 characters.
+Only non-secret controls belong in the MCP server environment:
+
+- `OPENCODE_ADVISOR_ALLOWED_ROOTS` (required): semicolon-separated allowed repositories
+- `OPENCODE_ADVISOR_TIMEOUT_MS`: OpenCode child timeout, default `300000`
+- `OPENCODE_ADVISOR_GIT_TIMEOUT_MS`: timeout for each Git context command, default `30000`
+- `OPENCODE_ADVISOR_MAX_DIFF_CHARS`: maximum sanitized diff context, default `60000`
+- `OPENCODE_ADVISOR_REDACT_SECRETS`: redact common secret-like values from collected Git diff context; enabled by default, with `0`, `false`, `off`, or `no` disabling it. Keep it enabled for normal use.
+- `OPENCODE_ADVISOR_OPENCODE_CMD`: optional absolute OpenCode executable override; on Windows it must be an existing trusted `.exe` path, not `.cmd`, `.bat`, or a command string with arguments
+- `OPENCODE_ADVISOR_QUEUE_DIR`: optional queue directory override
+- `OPENCODE_ADVISOR_QUEUE_LOG_DIR`: optional local runner log directory
+- `OPENCODE_ADVISOR_CONCURRENCY_GLOBAL`, `OPENCODE_ADVISOR_CONCURRENCY_PLANNER`, `OPENCODE_ADVISOR_CONCURRENCY_REVIEWER`
+- `OPENCODE_ADVISOR_QUEUE_INLINE_WAIT_MS`, `OPENCODE_ADVISOR_QUEUE_RETRY_AFTER_MS`, `OPENCODE_ADVISOR_QUEUE_MAX_PENDING`
+- `OPENCODE_ADVISOR_TASK_TTL_MS`, `OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS`, `OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS`, `OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS`, `OPENCODE_ADVISOR_QUEUE_POLL_MS`
+- `OPENCODE_ADVISOR_SESSION_RETENTION_MS`: retain Advisor-owned OpenCode sessions for this many milliseconds before maintenance deletes them; default `259200000` (3 days)
+- `OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS`: retain terminal queue tasks for this many milliseconds before maintenance deletes them; default `604800000` (7 days)
+- `OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS`: minimum interval between queue-maintenance passes, default `21600000` (6 hours)
+
+`OPENCODE_ADVISOR_HOME` is a local profile-location override for setup and the local server process. It must be absolute and is not an MCP provider setting; do not place it in a shared MCP configuration unless every user intentionally uses that same local profile.
+
+`OPENCODE_ADVISOR_TEST_FILE_TIMEOUT_MS` is a test-runner-only timeout for `npm test`; it is not a server configuration setting.
+
+Never set provider URL, model, API key, token, password, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`, `XDG_*`, or `OPENCODE_ADVISOR_PROVIDER_KEY` in the MCP configuration. The server ignores inherited provider credentials when it starts OpenCode.
+
+## Failure Behavior
+
+When the profile is missing, invalid, incompletely written, binding-mismatched, or cannot decrypt its credential, reviewer and planner calls return the existing public `opencode_failed` error with setup guidance. Validation happens before a task is written to the queue. Rerun setup after any such failure. A setup cancelled before profile writing leaves a prior valid profile intact.
+
+`opencode-advisor-doctor` has more specific local buckets:
+
+- `provider_setup_required`
+- `provider_authentication_failed`
+- `agent_missing_or_fallback`
+- `opencode_not_found`
+- `timeout`
+- `generic_opencode_failure`

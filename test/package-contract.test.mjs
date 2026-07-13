@@ -426,6 +426,15 @@ test("docs advertise the two roles plus queued task lookup", () => {
   assert.match(usageDoc, /provider_setup_required|opencode-advisor-setup/i);
 });
 
+test("docs keep doctor JSON output machine-readable from package and source installs", () => {
+  for (const text of [readme, usageDoc, configurationDoc, acceptanceDoc]) {
+    assert.match(text, /opencode-advisor-doctor --json/);
+    assert.match(text, /npm run --silent doctor -- --json/);
+  }
+  assert.match(usageDoc, /one object containing `ok`, `bucket`, `steps`, and `summary`/i);
+  assert.match(usageDoc, /exit with `0`.*with `1` otherwise/i);
+});
+
 test("docs describe optional role-specific variants without treating them as universal provider settings", () => {
   assert.match(readme, /reviewer `high` and planner `max`/i);
   assert.match(installDoc, /optional reasoning variant/i);

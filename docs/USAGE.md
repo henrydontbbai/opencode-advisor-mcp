@@ -85,4 +85,12 @@ $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
 opencode-advisor-doctor
 ```
 
+For automation, request the same sanitized report as JSON:
+
+```powershell
+opencode-advisor-doctor --json
+```
+
+From a source checkout, use `npm run --silent doctor -- --json` so npm does not add its command banner to stdout. Both output modes exit with `0` only when every doctor step passes and with `1` otherwise. JSON mode writes one object containing `ok`, `bucket`, `steps`, and `summary`; it does not expose the provider URL, model selection, role variant, or API key.
+
 Doctor treats a 401, timeout, agent fallback, empty output, or non-JSON OpenCode response as a failed verification. A real reviewer or planner result is usable for a release gate only when it contains the expected explicit conclusion; a fallback, timeout, 401, or empty response is not a pass.

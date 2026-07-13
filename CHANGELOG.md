@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Added `opencode-advisor-doctor --json` for a single sanitized, machine-readable report with the same checks and exit status as the default text output.
+
 ## 0.3.0 - 2026-07-13
 
 - added a shared queued planner/reviewer flow with one MCP server, three tools, and conservative default concurrency limits

@@ -137,6 +137,20 @@ export function formatDoctorReport(report) {
   return lines.join("\n");
 }
 
+export function formatDoctorJsonReport(report) {
+  return JSON.stringify({
+    ok: report.ok,
+    bucket: report.bucket,
+    steps: report.steps.map((step) => ({
+      id: step.id,
+      label: step.label,
+      ok: step.ok,
+      detail: step.detail,
+    })),
+    summary: report.summary,
+  }, null, 2);
+}
+
 async function runDirectAgentCheck({
   opencodeCommands,
   agentName,
@@ -582,10 +596,16 @@ export async function runDoctor({
   };
 }
 
-export async function main() {
+export async function main({
+  argv = process.argv.slice(2),
+  runDoctorImpl = runDoctor,
+  writeOutput = console.log,
+  writeError = console.error,
+} = {}) {
+  const jsonOutput = argv.includes("--json");
   try {
-    const report = await runDoctor();
-    console.log(formatDoctorReport(report));
+    const report = await runDoctorImpl();
+    writeOutput(jsonOutput ? formatDoctorJsonReport(report) : formatDoctorReport(report));
     process.exitCode = report.ok ? 0 : 1;
     return report;
   } catch (error) {
@@ -602,7 +622,9 @@ export async function main() {
       ],
       summary: "Doctor runtime failed.",
     };
-    console.error(formatDoctorReport(report));
+    const formatted = jsonOutput ? formatDoctorJsonReport(report) : formatDoctorReport(report);
+    if (jsonOutput) writeOutput(formatted);
+    else writeError(formatted);
     process.exitCode = 1;
     return report;
   }

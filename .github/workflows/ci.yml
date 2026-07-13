@@ -26,4 +26,6 @@ jobs:
       - run: npm test
       - run: npm run test:doctor
       - run: npm run print-agent
+      - run: npm run print-agent -- planner
       - run: npm pack --dry-run
+      - run: git diff --check

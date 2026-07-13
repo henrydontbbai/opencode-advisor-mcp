@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.0 - 2026-07-13
+
 - added a shared queued planner/reviewer flow with one MCP server, three tools, and conservative default concurrency limits
 - added the read-only `codex-planning-partner` template plus source-local task polling through `get_opencode_task`
 - expanded doctor, docs, and print-agent support to cover both bundled OpenCode agents

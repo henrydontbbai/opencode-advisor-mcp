@@ -21,6 +21,7 @@ const exampleToml = readFileSync(new URL("../examples/codex-mcp.toml", import.me
 const acceptanceDoc = readFileSync(new URL("../docs/ACCEPTANCE.md", import.meta.url), "utf8");
 const compatibilityDoc = readFileSync(new URL("../docs/COMPATIBILITY.md", import.meta.url), "utf8");
 const releasingDoc = readFileSync(new URL("../RELEASING.md", import.meta.url), "utf8");
+const changelog = readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8");
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const serverSource = readFileSync(new URL("../src/server.mjs", import.meta.url), "utf8");
 const serverTestSource = readFileSync(new URL("./server.test.mjs", import.meta.url), "utf8");
@@ -221,9 +222,17 @@ test("smoke script verifies startup with allowed roots and failure without confi
 });
 
 test("package.json is the single source for the advertised server version", () => {
+  const literalServerVersionPattern = /version:\s*["']\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?["']/;
   assert.match(serverSource, /package\.json/);
   assert.match(serverSource, /version:\s*packageMetadata\.version/);
-  assert.doesNotMatch(serverSource, /version:\s*["']0\.2\.0["']/);
+  for (const version of ["0.3.0", "0.3.0-rc.1", "0.3.0+build.7", "0.3.0-rc.1+build.7"]) {
+    assert.match(`version: "${version}"`, literalServerVersionPattern);
+  }
+  assert.doesNotMatch(serverSource, literalServerVersionPattern);
+  assert.match(
+    changelog,
+    new RegExp(`^## ${packageJson.version.replaceAll(".", "\\.")} - \\d{4}-\\d{2}-\\d{2}$`, "m"),
+  );
 });
 
 test("setup and doctor are published as separate non-MCP CLIs", () => {
@@ -288,8 +297,8 @@ test("published docs require independent provider setup and exclude legacy profi
 test("docs distinguish source, tarball, and published-package setup paths and list every queue control", () => {
   assert.match(readme, /npm run setup/);
   assert.match(readme, /src\\\\server\.mjs/);
-  assert.match(readme, /after publication|published release/i);
-  assert.match(installDoc, /after publication|published release/i);
+  assert.match(readme, /after `0\.3\.0` is published/i);
+  assert.match(installDoc, /after `0\.3\.0` is published/i);
   assert.match(releasingDoc, /credential-manifest binding/i);
   assert.match(releasingDoc, /manifest-overlay binding/i);
 

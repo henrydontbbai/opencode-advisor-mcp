@@ -40,6 +40,41 @@ Verify package contents do not include:
 - `test/`, `scripts/`, `node_modules/`, or local tarballs
 - private absolute paths or machine-specific runtime artifacts
 
-## External Actions
+## Publish In Exact Order
 
-Commit, push, publish, create a release, merge pull requests, and close issues only after separate explicit authorization. This document does not grant those actions.
+Each numbered step is a separate external action and requires explicit authorization. Never rebuild the tarball after approval or move the tag ahead of registry verification.
+
+1. Record the fully verified release commit and require a clean checkout:
+
+   ```powershell
+   $releaseCommit = git rev-parse HEAD
+   git status --short
+   ```
+
+2. Pack that exact checkout once and retain the generated filename and integrity output:
+
+   ```powershell
+   npm pack --json
+   ```
+
+3. Publish the exact generated `.tgz`, not the working directory:
+
+   ```powershell
+   npm publish .\opencode-advisor-mcp-0.3.0.tgz --access public
+   ```
+
+4. Verify npm registry metadata before creating any Git tag:
+
+   ```powershell
+   npm view opencode-advisor-mcp@0.3.0 version dist.integrity dist.tarball --json
+   ```
+
+   Install `opencode-advisor-mcp@0.3.0` into a fresh temporary prefix and smoke all four published bins. The registry version and integrity must match the approved tarball evidence.
+
+5. Create and push annotated tag `v0.3.0` at `$releaseCommit`, then verify the remote tag resolves to the same commit. Do not tag any later documentation or cleanup commit.
+
+6. Create the GitHub Release from `v0.3.0` using the matching changelog section. The release must reference the already verified registry package and the same source commit.
+
+## Authorization Boundaries
+
+Commit, push, merge pull requests, edit or close issues, perform npm identity/package-permission checks, publish, push a tag, and create a GitHub Release only after separate explicit authorization. Authorization for one step does not authorize a later step, and this document grants none of them.

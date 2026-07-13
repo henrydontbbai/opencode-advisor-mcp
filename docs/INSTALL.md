@@ -10,25 +10,25 @@ The provider does not need an OpenCode account or a normal-profile login session
 
 ## Package Install
 
-For a source checkout:
+After `0.3.0` is published, install from the npm registry:
 
 ```powershell
-npm ci
-npm run setup
+npm install -g opencode-advisor-mcp@0.3.0
+opencode-advisor-setup
 ```
 
-Before publication, install a local packed tarball:
+For release-candidate validation, install the exact local packed tarball:
 
 ```powershell
 npm install -g <path-to-opencode-advisor-mcp.tgz>
 opencode-advisor-setup
 ```
 
-After publication, a registry installation can use:
+For source development, install dependencies and run setup from the checkout:
 
 ```powershell
-npm install -g opencode-advisor-mcp
-opencode-advisor-setup
+npm ci
+npm run setup
 ```
 
 The setup command is intentionally not the MCP server command. It prompts interactively for the independent third-party provider configuration and hidden API key. It accepts no configuration arguments and no piped key input. It copies `codex-advisor.md` and `codex-planning-partner.md` into the independent profile. It does not read normal OpenCode, Codex, or Cockpit provider configuration or credentials.

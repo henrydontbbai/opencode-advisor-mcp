@@ -1292,6 +1292,64 @@ test("createTaskQueue rejects unsafe public task ids before any runner work", as
   assert.equal(spawnCalled, false);
 });
 
+test("createTaskQueue rejects empty and over-64-character public task ids before any runner work", async () => {
+  const queueDir = createTempDir();
+  let spawnCalled = false;
+  let profileLoads = 0;
+  const queue = createTaskQueue({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCalled = true;
+      return { unref() {} };
+    },
+    loadAdvisorProfile: async () => {
+      profileLoads += 1;
+      throw new Error("profile loading must not run");
+    },
+  });
+
+  for (const taskId of ["ocq_", `ocq_${"a".repeat(61)}`]) {
+    const result = await queue.getTaskResult({ task_id: taskId });
+    assert.deepEqual(result, {
+      ok: false,
+      error: "opencode_failed",
+      message: "Invalid OpenCode task id.",
+      details: {
+        status: "invalid_task_id",
+        phase_pending: false,
+      },
+    });
+  }
+  assert.equal(spawnCalled, false);
+  assert.equal(profileLoads, 0);
+});
+
+test("createTaskQueue accepts a 64-character public task id", async () => {
+  const queueDir = createTempDir();
+  let profileLoads = 0;
+  let spawnCalled = false;
+  const queue = createTaskQueue({
+    env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
+    platform: process.platform,
+    spawnProcess: () => {
+      spawnCalled = true;
+      return { unref() {} };
+    },
+    loadAdvisorProfile: async () => {
+      profileLoads += 1;
+      return PERSISTENCE_PROFILE;
+    },
+  });
+
+  const result = await queue.getTaskResult({ task_id: `ocq_${"a".repeat(60)}` });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "opencode_failed");
+  assert.equal(result.details.status, "expired");
+  assert.equal(profileLoads, 1);
+  assert.equal(spawnCalled, false);
+});
+
 test("createTaskQueue returns stable failures for terminal tasks missing a result", async () => {
   const queueDir = createTempDir();
   const cases = [

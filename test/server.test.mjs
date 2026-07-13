@@ -913,6 +913,51 @@ test("askOpenCodeAdvisor rejects windows absolute paths on posix platform", asyn
   assert.equal(result.error, "invalid_paths");
 });
 
+test("askOpenCodeAdvisor rejects Windows drive-relative review paths before profile or queue work", async () => {
+  for (const requestedPath of ["C:relative-file.mjs", "z:relative-file.mjs"]) {
+    const { runProcess, calls } = createMockRunProcess();
+    let realpathCalls = 0;
+    let profileLoads = 0;
+    let queueSubmissions = 0;
+    const result = await askOpenCodeAdvisor(
+      {
+        cwd: WINDOWS_CHILD_REPO,
+        paths: [requestedPath],
+        include_diff: false,
+        include_status: false,
+      },
+      {
+        runProcess,
+        realpath: async (candidate) => {
+          realpathCalls += 1;
+          return candidate;
+        },
+        loadAdvisorProfile: async () => {
+          profileLoads += 1;
+          throw new Error("profile loading must not run");
+        },
+        taskQueue: {
+          submitAndWait: async () => {
+            queueSubmissions += 1;
+            throw new Error("queue submission must not run");
+          },
+        },
+        env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT },
+        platform: "win32",
+        path: { ...path.win32 },
+      },
+    );
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "invalid_paths");
+    assert.deepEqual(result.details, {});
+    assert.equal(calls.length, 0);
+    assert.equal(realpathCalls, 0);
+    assert.equal(profileLoads, 0);
+    assert.equal(queueSubmissions, 0);
+  }
+});
+
 test("askOpenCodeAdvisor rejects git pathspec magic in review paths", async () => {
   for (const paths of [
     [":(top)package.json"],

@@ -474,6 +474,9 @@ function normalizeReviewPaths(paths = [], pathApi = path) {
       if (entry.includes("\0")) throw new Error("paths must not contain NUL bytes");
       if (entry.startsWith(":")) throw new Error("paths must be literal relative paths");
       if (/[*?[\]]/.test(entry)) throw new Error("paths must be literal relative paths");
+      if (pathApi.sep === "\\" && /^[A-Za-z]:/.test(entry)) {
+        throw new Error("paths must be relative to cwd");
+      }
       if (pathApi.isAbsolute(entry) || path.win32.isAbsolute(entry) || path.posix.isAbsolute(entry)) {
         throw new Error("paths must be relative to cwd");
       }

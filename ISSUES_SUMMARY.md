@@ -11,7 +11,7 @@ Status meanings:
 
 ## Release Closeout Evidence
 
-The release baseline documented below is `24e86a3` (the `#102` merge); `#100` and `#101` are governance-only metadata updates in this sequence. The rows were checked against the GitHub merge commit, required Ubuntu/Windows x Node 20/22 CI checks, and GitHub closing references on 2026-07-13. A blank closing-reference cell means the PR did not declare an issue for automatic closure; it is not evidence that a separately tracked issue was skipped.
+The release baseline documented below is `f441977` (the `#106` merge); `#100`, `#101`, and `#103` are governance-only metadata updates in this sequence. The rows were checked against the GitHub merge commit, required Ubuntu/Windows x Node 20/22 CI checks, and GitHub closing references on 2026-07-13. A blank closing-reference cell means the PR did not declare an issue for automatic closure; it is not evidence that a separately tracked issue was skipped.
 
 | PR | Merge commit on `main` | CI evidence | GitHub closing references |
 |---|---|---|---|
@@ -26,6 +26,11 @@ The release baseline documented below is `24e86a3` (the `#102` merge); `#100` an
 | #97 | `fea2d2b` | required Ubuntu/Windows x Node 20/22 checks succeeded | #34 |
 | #98 | `262e7bc` | required Ubuntu/Windows x Node 20/22 checks succeeded | none; #43 remains an umbrella |
 | #102 | `24e86a3` | required Ubuntu/Windows x Node 20/22 checks succeeded | none; part of #45, which remains an umbrella |
+| #104 | `06122dc` | main push CI run `29256376659`: Ubuntu/Windows x Node 20/22 succeeded | none; CI timing-flake test fix |
+| #105 | `e4164b7` | main push CI run `29258169856`: Ubuntu/Windows x Node 20/22 succeeded | none; managed-session retention, part of #45 |
+| #106 | `f441977` | main push CI run `29259255830`: Ubuntu/Windows x Node 20/22 succeeded | none; `0.3.0` release preparation |
+
+`0.3.0` is prepared at `f441977`, but this table is not publication evidence. npm publish, registry verification, tag `v0.3.0`, and the GitHub Release remain separate authorized release operations.
 
 ## Dependency Decision Evidence
 
@@ -70,12 +75,12 @@ The release baseline documented below is `24e86a3` (the `#102` merge); `#100` an
 
 ## Next
 
-The dedicated `#16` and `#34` stability lanes are complete. Keep follow-up work under the existing umbrellas so it remains separately scoped from release, dependency, and MCP-contract changes.
+The dedicated `#16` and `#34` stability lanes are complete. The queue-maintenance timing flake and managed-session retention correctness are also covered by `#104` and `#105`. Keep follow-up work under the existing umbrellas so it remains separately scoped from release, dependency, and MCP-contract changes.
 
 | Issue | Focus | Required evidence before closure or merge |
 |---|---|---|
 | #43 | Keep the deep-audit umbrella open for newly substantiated input, runtime, or UX risks. | Start from a focused reproduction and preserve the three-tool public contract; do not reopen the delivered task-id or drive-relative-path work. |
-| #45 | Keep the queue-lifecycle umbrella open for operational concurrency evidence beyond the completed test lane. `#102` fenced stale recovery snapshots so a public poll cannot overwrite a terminal runner result. | Reproduce a remaining lifecycle risk under a focused fault or multi-process test before changing queue behavior; retain token fencing and existing top-level error codes. |
+| #45 | Keep the queue-lifecycle umbrella open for operational concurrency evidence beyond the completed test lane. `#102` fenced stale recovery snapshots, `#104` stabilized the maintenance shutdown test without changing production timing, and `#105` added explicit ownership and retry-safe retention for managed sessions. | Reproduce a remaining lifecycle risk under a focused fault or multi-process test before changing queue behavior; retain token fencing, ownership evidence, and existing top-level error codes. |
 
 ## Stability Completion Matrix
 
@@ -100,8 +105,8 @@ The dedicated `#16` and `#34` stability lanes are complete. Keep follow-up work 
 
 | Umbrella | Covered by merged work | Remaining scoped work |
 |---|---|---|
-| #43 | Real-path containment (`#85`), process-tree timeout cleanup (`#87`), queue/session isolation (`#91`), runtime command and prompt hardening (`#92`), release gates (`#93`), independent provider isolation (`#96`), and the task-id/Windows drive-relative-path boundary (`#98`) cover the delivered audit findings. | Keep the umbrella for newly substantiated audit risks. Diagnostic response expansion remains deferred under #71; diff caching and broader observability remain outside this lane. |
-| #45 | Queue runner leases, atomic stale-owner takeover, exact-once claims, heartbeat ownership, signal cleanup, stale-task recovery, terminal-state/heartbeat polling evidence, fenced startup reservations, and recovery snapshot fencing are covered by `#84`, `#91`, `#94`, `#96`, `#97`, and `#102`. | Keep the umbrella for remaining operational lifecycle evidence, especially fault or multi-process reproductions not covered by the closed `#34` test lane. Do not introduce new top-level error codes or queue-control MCP tools here. |
+| #43 | Real-path containment (`#85`), process-tree timeout cleanup (`#87`), queue/session isolation (`#91`), runtime command and prompt hardening (`#92`), release gates (`#93`), independent provider isolation (`#96`), and the task-id/Windows drive-relative-path boundary (`#98`) cover the delivered audit findings. Managed-session ownership records in `#105` add bounded, credential-free cleanup without scanning ordinary OpenCode sessions. | Keep the umbrella for newly substantiated audit risks. Diagnostic response expansion remains deferred under #71; diff caching and broader observability remain outside this lane. |
+| #45 | Queue runner leases, atomic stale-owner takeover, exact-once claims, heartbeat ownership, signal cleanup, stale-task recovery, terminal-state/heartbeat polling evidence, fenced startup reservations, recovery snapshot fencing, maintenance-test stabilization, and retry-safe managed-session retention are covered by `#84`, `#91`, `#94`, `#96`, `#97`, `#102`, `#104`, and `#105`. | Keep the umbrella for remaining operational lifecycle evidence, especially fault or multi-process reproductions not covered by the closed `#34` test lane. Historical untitled or otherwise unowned sessions remain deliberately unmanaged. Do not introduce new top-level error codes or queue-control MCP tools here. |
 
 ## Duplicate / Consolidate
 
@@ -133,7 +138,7 @@ The dedicated `#16` and `#34` stability lanes are complete. Keep follow-up work 
 ## Operating Rules
 
 - Keep `main` as the source of truth for whether an issue is still real.
-- Do not mix `zod` v4, release automation, npm publication, or new MCP tools into the shortlist above.
+- Do not mix release automation, npm publication, or new MCP tools into the shortlist above; the `zod` v4 decision is already complete.
 - Keep the public MCP contract frozen for future `#43` and `#45` maintenance: exactly three tools, existing success fields, and existing top-level error codes.
 - If a new issue duplicates one already listed here, prefer updating the canonical issue instead of growing parallel threads.
 - Keep `#43` open as the audit umbrella and `#45` open as the queue-lifecycle umbrella until their remaining scoped work has evidence.

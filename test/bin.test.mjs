@@ -53,3 +53,28 @@ test("doctor writes its failure report before exiting", async () => {
     },
   );
 });
+
+test("doctor --json writes one machine-readable failure report before exiting", async () => {
+  const missingProfileHome = path.join(os.tmpdir(), `opencode-advisor-missing-json-${randomUUID()}`);
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [doctorBinPath, "--json"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        OPENCODE_ADVISOR_ALLOWED_ROOTS: repoRoot,
+        OPENCODE_ADVISOR_HOME: missingProfileHome,
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.equal(error.stderr, "");
+      const report = JSON.parse(error.stdout);
+      assert.equal(report.ok, false);
+      assert.equal(report.bucket, "provider_setup_required");
+      assert.equal(report.steps.length, 1);
+      assert.match(report.steps[0].detail, /opencode-advisor-setup/);
+      return true;
+    },
+  );
+});

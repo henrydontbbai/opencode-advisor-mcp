@@ -81,6 +81,8 @@ npm run doctor
 
 `opencode-advisor-doctor` checks the independent profile, both roles, structured JSON output, and sanitized MCP response shape. A missing or unreadable profile remains an `opencode_failed` MCP result with setup guidance; it never creates a queued task.
 
+Use `opencode-advisor-doctor --json` (or `npm run --silent doctor -- --json` from source) for a machine-readable report. JSON mode preserves the same checks and exit status as the default text report and does not add provider settings or credentials.
+
 ## Security Boundaries
 
 - Reviewer and planner child processes run with `--pure` and an explicit `provider/model`.

@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runDoctor as runDoctorImpl, findPayloadLeaks } from "../scripts/opencode-advisor-doctor.mjs";
+import {
+  runDoctor as runDoctorImpl,
+  findPayloadLeaks,
+  formatDoctorJsonReport,
+} from "../scripts/opencode-advisor-doctor.mjs";
+import { main as runDoctorCli } from "../src/doctor.mjs";
 import {
   createPlannerSuccessResponse,
   createSuccessResponse,
@@ -778,4 +783,94 @@ test("runDoctor allows planner health to fail independently", async () => {
   assert.equal(report.ok, false);
   assert.equal(report.bucket, "agent_missing_or_fallback");
   assert.equal(report.steps.at(-1).label, "askOpenCodePlanner health check");
+});
+
+test("formatDoctorJsonReport preserves the sanitized report contract", () => {
+  const report = {
+    ok: false,
+    bucket: "provider_setup_required",
+    provider_url: "https://provider-secret.example.test/v1",
+    steps: [
+      {
+        id: "provider-profile",
+        label: "Independent provider profile",
+        ok: false,
+        detail: "Run opencode-advisor-setup.",
+        stderr: "provider-secret-step-output",
+      },
+    ],
+    summary: "Independent provider setup is required",
+  };
+
+  const output = formatDoctorJsonReport(report);
+
+  assert.deepEqual(JSON.parse(output), {
+    ok: false,
+    bucket: "provider_setup_required",
+    steps: [
+      {
+        id: "provider-profile",
+        label: "Independent provider profile",
+        ok: false,
+        detail: "Run opencode-advisor-setup.",
+      },
+    ],
+    summary: "Independent provider setup is required",
+  });
+  assert.equal(output.includes("provider-secret"), false);
+  assert.equal(output.endsWith("\n"), false);
+});
+
+test("doctor JSON mode preserves success reports and exit status", async () => {
+  const originalExitCode = process.exitCode;
+  const stdout = [];
+  const stderr = [];
+  const report = {
+    ok: true,
+    bucket: null,
+    steps: [],
+    summary: "Doctor checks passed",
+  };
+
+  try {
+    const result = await runDoctorCli({
+      argv: ["--json"],
+      runDoctorImpl: async () => report,
+      writeOutput: (value) => stdout.push(value),
+      writeError: (value) => stderr.push(value),
+    });
+
+    assert.equal(result, report);
+    assert.deepEqual(JSON.parse(stdout.join("")), report);
+    assert.deepEqual(stderr, []);
+    assert.equal(process.exitCode, 0);
+  } finally {
+    process.exitCode = originalExitCode;
+  }
+});
+
+test("doctor JSON mode keeps runtime failures machine-readable", async () => {
+  const originalExitCode = process.exitCode;
+  const stdout = [];
+  const stderr = [];
+
+  try {
+    const result = await runDoctorCli({
+      argv: ["--json"],
+      runDoctorImpl: async () => {
+        throw new Error("provider-secret-should-not-be-printed");
+      },
+      writeOutput: (value) => stdout.push(value),
+      writeError: (value) => stderr.push(value),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.bucket, "generic_opencode_failure");
+    assert.deepEqual(JSON.parse(stdout.join("")), result);
+    assert.equal(stdout.join("").includes("provider-secret-should-not-be-printed"), false);
+    assert.deepEqual(stderr, []);
+    assert.equal(process.exitCode, 1);
+  } finally {
+    process.exitCode = originalExitCode;
+  }
 });

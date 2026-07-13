@@ -82,3 +82,5 @@ When the profile is missing, invalid, incompletely written, binding-mismatched, 
 - `opencode_not_found`
 - `timeout`
 - `generic_opencode_failure`
+
+`opencode-advisor-doctor --json` returns the same sanitized report and bucket as a single JSON object. It preserves the normal `0` success and `1` failure exit status. From source, use `npm run --silent doctor -- --json` so npm does not add its command banner to stdout.

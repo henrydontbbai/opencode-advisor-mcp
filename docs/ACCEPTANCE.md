@@ -17,6 +17,8 @@ git diff --check
 
 Expected: all tests pass, both agent templates print, and the dry-run tarball contains setup, doctor, profile modules, and no credentials or local profile artifacts.
 
+Run `opencode-advisor-doctor --json` (or `npm run --silent doctor -- --json` from source) against both a passing profile and a controlled failure. Expected: stdout is one parseable JSON object with `ok`, `bucket`, `steps`, and `summary`; the exit code remains `0` for a complete pass and `1` for failure; no provider URL, model, variant, or credential appears.
+
 ## Independent Provider Check
 
 Run `opencode-advisor-setup` in a terminal and configure a disposable or intended third-party provider. Confirm that setup rejects API key arguments and non-interactive input.

@@ -113,6 +113,90 @@ test("a runner acknowledges its startup reservation after it acquires a lease", 
   assert.equal(existsSync(markerPath), false);
 });
 
+function writeFreshRunnerLease(queueDir, { pid = process.pid } = {}) {
+  const runner = {
+    runner_id: "runner_live",
+    pid,
+    heartbeat_at: new Date().toISOString(),
+    lease_expires_at: new Date(Date.now() + 600000).toISOString(),
+    started_at: new Date().toISOString(),
+  };
+  writeFileSync(path.join(queueDir, "_runner.lock"), `${JSON.stringify(runner)}\n`, "utf8");
+  writeFileSync(path.join(queueDir, "_runner.json"), `${JSON.stringify(runner)}\n`, "utf8");
+}
+
+test("a runner releases its matching startup reservation when a fresh lease prevents acquisition", async () => {
+  const queueDir = createTempDir("ocq-startup-live-lease-");
+  const startupToken = "live-lease-startup-token";
+  const markerPath = path.join(queueDir, "_runner.starting");
+  writeFileSync(markerPath, `${JSON.stringify({ id: startupToken, started_at: new Date().toISOString() })}\n`, "utf8");
+  writeFreshRunnerLease(queueDir);
+
+  const result = await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_STARTUP_TOKEN: startupToken,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "600000",
+    },
+    platform: process.platform,
+    signals: null,
+  });
+
+  assert.deepEqual(result, { started: false });
+  assert.equal(existsSync(markerPath), false);
+});
+
+test("a runner blocked by a fresh lease preserves a replacement startup reservation", async () => {
+  const queueDir = createTempDir("ocq-startup-live-replacement-");
+  const startupToken = "delayed-startup-token";
+  const replacementToken = "replacement-startup-token";
+  const markerPath = path.join(queueDir, "_runner.starting");
+  const replacement = `${JSON.stringify({ id: replacementToken, started_at: new Date().toISOString() })}\n`;
+  writeFileSync(markerPath, replacement, "utf8");
+  writeFreshRunnerLease(queueDir);
+
+  const result = await runQueueRunner({
+    env: {
+      OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+      OPENCODE_ADVISOR_QUEUE_STARTUP_TOKEN: startupToken,
+      OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "600000",
+    },
+    platform: process.platform,
+    signals: null,
+  });
+
+  assert.deepEqual(result, { started: false });
+  assert.equal(readFileSync(markerPath, "utf8"), replacement);
+});
+
+test("a runner releases its matching startup reservation when lease acquisition throws", async () => {
+  const queueDir = createTempDir("ocq-startup-lease-error-");
+  const startupToken = "lease-error-startup-token";
+  const markerPath = path.join(queueDir, "_runner.starting");
+  writeFileSync(markerPath, `${JSON.stringify({ id: startupToken, started_at: new Date().toISOString() })}\n`, "utf8");
+  writeFreshRunnerLease(queueDir, { pid: process.pid + 1 });
+
+  await assert.rejects(
+    runQueueRunner({
+      env: {
+        OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
+        OPENCODE_ADVISOR_QUEUE_STARTUP_TOKEN: startupToken,
+        OPENCODE_ADVISOR_QUEUE_RUNNER_STALE_MS: "600000",
+      },
+      platform: process.platform,
+      signals: null,
+      processControl: {
+        isProcessAlive() {
+          throw new Error("lease inspection failed");
+        },
+      },
+    }),
+    /lease inspection failed/,
+  );
+
+  assert.equal(existsSync(markerPath), false);
+});
+
 test("a delayed child cannot remove a replacement startup reservation", async () => {
   const queueDir = createTempDir("ocq-startup-fence-");
   const markerPath = path.join(queueDir, "_runner.starting");

@@ -1518,12 +1518,19 @@ export async function runQueueRunner({
     pid: process.pid,
     started_at: isoFrom(Date.now()),
   };
-  const acquired = await acquireRunnerLock(config.queueDir, config, runnerState, processControl);
+  let acquired;
+  try {
+    acquired = await acquireRunnerLock(config.queueDir, config, runnerState, processControl);
+  } catch (error) {
+    await acknowledgeRunnerStartup(config.queueDir, startupToken);
+    throw error;
+  }
+
+  await acknowledgeRunnerStartup(config.queueDir, startupToken);
 
   if (!acquired) {
     return { started: false };
   }
-  await acknowledgeRunnerStartup(config.queueDir, startupToken);
 
   let idleSince = null;
   let consecutiveErrors = 0;

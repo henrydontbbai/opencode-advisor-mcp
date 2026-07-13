@@ -169,8 +169,12 @@ function inputLimitMessage(input = {}) {
   return null;
 }
 
+function formatUntrustedBlockContent(value) {
+  return String(value || "(not provided)").replaceAll("<<<", "\\u003c\\u003c\\u003c");
+}
+
 function untrustedBlock(label, value) {
-  return `<<< UNTRUSTED ${label} >>>\n${value || "(not provided)"}\n<<< END UNTRUSTED ${label} >>>`;
+  return `<<< UNTRUSTED ${label} >>>\n${formatUntrustedBlockContent(value)}\n<<< END UNTRUSTED ${label} >>>`;
 }
 
 function stripModelReasoning(text) {

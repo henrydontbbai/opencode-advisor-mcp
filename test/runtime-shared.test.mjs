@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  createPlannerSuccessResponse,
   createSuccessResponse,
   getOpencodeFallbackCommands,
   isSensitiveEnvironmentName,
   outputHasAgentFallback,
   outputHasUpstreamUnavailable,
+  PLANNER_SUCCESS_RESPONSE_KEYS,
+  positiveNumber,
   resolveOpencodeCommand,
   resolveOpencodeCommands,
   SUCCESS_RESPONSE_KEYS,
@@ -30,6 +33,36 @@ test("createSuccessResponse returns the canonical public success shape", () => {
     advisor_text: "Looks good",
     opencode_exit_code: 0,
   });
+});
+
+test("createPlannerSuccessResponse returns the canonical public success shape", () => {
+  const result = createPlannerSuccessResponse({
+    baseRef: "HEAD",
+    status: "M docs/plan.md",
+    diffTruncated: true,
+    plannerText: "Tighten the validation gate.",
+    opencodeExitCode: 0,
+  });
+
+  assert.deepEqual(Object.keys(result), PLANNER_SUCCESS_RESPONSE_KEYS);
+  assert.deepEqual(result, {
+    ok: true,
+    base_ref: "HEAD",
+    status: "M docs/plan.md",
+    diff_truncated: true,
+    planner_text: "Tighten the validation gate.",
+    opencode_exit_code: 0,
+  });
+});
+
+test("positiveNumber accepts only finite positive decimal values", () => {
+  const fallback = 42;
+
+  for (const value of [0, -1, Number.NaN, Infinity, "0", "-1", "not-a-number", null, undefined]) {
+    assert.equal(positiveNumber(value, fallback), fallback, String(value));
+  }
+  assert.equal(positiveNumber(2.5, fallback), 2.5);
+  assert.equal(positiveNumber("12.5", fallback), 12.5);
 });
 
 test("outputHasAgentFallback ignores fallback phrases inside assistant text events", () => {

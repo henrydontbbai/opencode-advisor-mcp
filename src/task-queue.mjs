@@ -24,6 +24,7 @@ const QUEUE_PENDING_MESSAGE =
   "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.";
 const RUNNER_LOCK_FILENAME = "_runner.lock";
 const RUNNER_STATE_FILENAME = "_runner.json";
+const RUNNER_STARTUP_FILENAME = "_runner.starting";
 const RUNNER_RELEASE_PREFIX = "_runner.release.";
 const RUNNER_SCRIPT_PATH = fileURLToPath(new URL("./queue-runner.mjs", import.meta.url));
 const TASK_ID_PATTERN = /^ocq_[A-Za-z0-9]+$/;
@@ -120,6 +121,10 @@ function runnerStatePath(queueDir) {
   return path.join(queueDir, RUNNER_STATE_FILENAME);
 }
 
+function runnerStartupPath(queueDir) {
+  return path.join(queueDir, RUNNER_STARTUP_FILENAME);
+}
+
 function maintenanceLockPath(queueDir) {
   return path.join(queueDir, "_maintenance.lock");
 }
@@ -208,7 +213,7 @@ function getQueueLogDir(env = process.env, platform = process.platform) {
   return pathForPlatform(platform).resolve(configured);
 }
 
-function buildQueueRunnerEnv(env, queueDir, profile) {
+function buildQueueRunnerEnv(env, queueDir, profile, startupToken) {
   const runnerEnv = {};
   for (const [name, value] of Object.entries(env)) {
     if (
@@ -222,6 +227,9 @@ function buildQueueRunnerEnv(env, queueDir, profile) {
     }
   }
   runnerEnv.OPENCODE_ADVISOR_QUEUE_DIR = queueDir;
+  if (startupToken) {
+    runnerEnv.OPENCODE_ADVISOR_QUEUE_STARTUP_TOKEN = startupToken;
+  }
   return runnerEnv;
 }
 
@@ -573,6 +581,115 @@ async function readRunnerLockStats(queueDir) {
       return null;
     }
     throw error;
+  }
+}
+
+async function moveRunnerStartupMarker(markerPath) {
+  const movedPath = `${markerPath}.${randomUUID()}.stale`;
+  await fs.rename(markerPath, movedPath);
+  return movedPath;
+}
+
+async function acquireRunnerStartupMarker(queueDir, config) {
+  const markerPath = runnerStartupPath(queueDir);
+  return withRunnerReleaseLock(queueDir, async () => {
+    let stats;
+    try {
+      stats = await fs.stat(markerPath);
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    if (stats && Date.now() - stats.mtimeMs <= runnerStartupStaleMs(config)) {
+      return null;
+    }
+
+    if (stats) {
+      try {
+        const stalePath = await moveRunnerStartupMarker(markerPath);
+        await fs.unlink(stalePath).catch(() => {});
+      } catch (error) {
+        if (error?.code !== "ENOENT") {
+          throw error;
+        }
+        return null;
+      }
+    }
+
+    const marker = {
+      id: randomUUID(),
+      path: markerPath,
+    };
+    try {
+      const handle = await fs.open(markerPath, "wx", 0o600);
+      try {
+        await handle.writeFile(`${JSON.stringify({ id: marker.id, started_at: isoFrom(Date.now()) })}\n`);
+      } catch (error) {
+        await fs.unlink(markerPath).catch(() => {});
+        throw error;
+      } finally {
+        await handle.close();
+      }
+      return marker;
+    } catch (error) {
+      if (error?.code === "EEXIST") {
+        return null;
+      }
+      throw error;
+    }
+  });
+}
+
+async function releaseRunnerStartupMarker(queueDir, startupToken) {
+  if (!startupToken) {
+    return false;
+  }
+  const markerPath = runnerStartupPath(queueDir);
+  return withRunnerReleaseLock(queueDir, async () => {
+    let movedPath;
+    try {
+      movedPath = await moveRunnerStartupMarker(markerPath);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return false;
+      }
+      throw error;
+    }
+
+    try {
+      const marker = await readJsonIfExists(movedPath);
+      if (marker?.id !== startupToken) {
+        await fs.rename(movedPath, markerPath).catch(() => {});
+        return false;
+      }
+      await fs.unlink(movedPath).catch(() => {});
+      return true;
+    } catch (error) {
+      await fs.rename(movedPath, markerPath).catch(() => {});
+      if (error?.code === QUEUE_READ_RETRY_CODE) {
+        return false;
+      }
+      throw error;
+    }
+  });
+}
+
+function getStartupToken(env) {
+  const token = env.OPENCODE_ADVISOR_QUEUE_STARTUP_TOKEN;
+  return typeof token === "string" && token ? token : null;
+}
+
+function runnerStartupStaleMs(config) {
+  return Math.max(1000, config.runnerStaleMs);
+}
+
+async function acknowledgeRunnerStartup(queueDir, startupToken) {
+  try {
+    return await releaseRunnerStartupMarker(queueDir, startupToken);
+  } catch {
+    return false;
   }
 }
 
@@ -1214,7 +1331,7 @@ export async function runQueueMaintenance({
   });
 }
 
-export async function ensureQueueRunner({
+async function startQueueRunner({
   env = process.env,
   platform = process.platform,
   config = getQueueConfig(env, platform),
@@ -1222,6 +1339,7 @@ export async function ensureQueueRunner({
   nodeExec = process.execPath,
   processControl = defaultProcessControl(),
   profile,
+  startupToken,
 } = {}) {
   await ensureQueueDir(config.queueDir);
   let stdoutHandle = null;
@@ -1251,7 +1369,7 @@ export async function ensureQueueRunner({
     return false;
   }
 
-  const runnerEnv = buildQueueRunnerEnv(env, config.queueDir, profile);
+  const runnerEnv = buildQueueRunnerEnv(env, config.queueDir, profile, startupToken);
 
   let stdio = "ignore";
   if (config.queueLogDir) {
@@ -1273,6 +1391,30 @@ export async function ensureQueueRunner({
   } finally {
     await stdoutHandle?.close().catch(() => {});
     await stderrHandle?.close().catch(() => {});
+  }
+}
+
+export async function ensureQueueRunner(options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const config = options.config ?? getQueueConfig(env, platform);
+  await ensureQueueDir(config.queueDir);
+  const marker = await acquireRunnerStartupMarker(config.queueDir, config);
+  if (!marker) {
+    return false;
+  }
+
+  try {
+    const started = await startQueueRunner({ ...options, env, platform, config, startupToken: marker.id });
+    if (!started) {
+      await releaseRunnerStartupMarker(config.queueDir, marker.id);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    await releaseRunnerStartupMarker(config.queueDir, marker.id).catch(() => {});
+    throw error;
   }
 }
 
@@ -1368,6 +1510,7 @@ export async function runQueueRunner({
   signals?.on?.("SIGINT", stop);
 
   const config = getQueueConfig(env, platform);
+  const startupToken = getStartupToken(env);
   const profile = await loadPersistenceProfile(loadProfile, env, platform);
   const runnerId = `runner_${process.pid}_${Date.now()}`;
   const runnerState = {
@@ -1375,7 +1518,15 @@ export async function runQueueRunner({
     pid: process.pid,
     started_at: isoFrom(Date.now()),
   };
-  const acquired = await acquireRunnerLock(config.queueDir, config, runnerState, processControl);
+  let acquired;
+  try {
+    acquired = await acquireRunnerLock(config.queueDir, config, runnerState, processControl);
+  } catch (error) {
+    await acknowledgeRunnerStartup(config.queueDir, startupToken);
+    throw error;
+  }
+
+  await acknowledgeRunnerStartup(config.queueDir, startupToken);
 
   if (!acquired) {
     return { started: false };

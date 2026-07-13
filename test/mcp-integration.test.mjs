@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -15,6 +17,7 @@ async function withClient(fn) {
     cwd: repoRoot,
     env: {
       OPENCODE_ADVISOR_ALLOWED_ROOTS: repoRoot,
+      OPENCODE_ADVISOR_OPENCODE_DATA_HOME: path.join(os.tmpdir(), "opencode-advisor-mcp-integration-profile"),
     },
     stderr: "pipe",
   });

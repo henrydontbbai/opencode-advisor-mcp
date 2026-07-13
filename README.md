@@ -98,6 +98,7 @@ tool_timeout_sec = 420
 
 [mcp_servers.opencode_advisor.env]
 OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root-or-semicolon-list>"
+OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-opencode-data-home>"
 OPENCODE_ADVISOR_TIMEOUT_MS = "300000"
 OPENCODE_ADVISOR_MAX_DIFF_CHARS = "60000"
 ```
@@ -106,17 +107,21 @@ Replace `<repo-root>` with the absolute path to this source checkout.
 
 `OPENCODE_ADVISOR_ALLOWED_ROOTS` accepts a semicolon-separated list. If a Windows path itself contains a semicolon, wrap that one path in double quotes, for example `"C:\workspace\team;alpha";C:\workspace\other`.
 
+`OPENCODE_ADVISOR_OPENCODE_DATA_HOME` is required and must be an absolute, dedicated directory for advisor-managed OpenCode sessions. For example, use `%USERPROFILE%\.codex\opencode-advisor\opencode-data` on Windows or `$HOME/.codex/opencode-advisor/opencode-data` on macOS/Linux. Authenticate that isolated profile yourself with `opencode auth login` while `XDG_DATA_HOME` points at the same directory. The server never copies your normal OpenCode database, credentials, or WAL files into this profile.
+
 Keep `tool_timeout_sec` larger than `OPENCODE_ADVISOR_TIMEOUT_MS / 1000`, or Codex may cut off the MCP tool before the inner OpenCode timeout is reached.
 
 After the agent template is installed, set allowed roots in the same shell that will run doctor. The terminal check does not inherit MCP env from the Codex config block above.
 
 ```powershell
 $env:OPENCODE_ADVISOR_ALLOWED_ROOTS = "<allowed-root>"
+$env:OPENCODE_ADVISOR_OPENCODE_DATA_HOME = "<dedicated-opencode-data-home>"
 npm run doctor
 ```
 
 ```bash
 export OPENCODE_ADVISOR_ALLOWED_ROOTS="<allowed-root>"
+export OPENCODE_ADVISOR_OPENCODE_DATA_HOME="<dedicated-opencode-data-home>"
 npm run doctor
 ```
 
@@ -178,6 +183,8 @@ Queue state is stored locally under `%USERPROFILE%\.codex\opencode-advisor\queue
 If you set `OPENCODE_ADVISOR_QUEUE_LOG_DIR`, detached runner stdout/stderr is written there for local diagnosis instead of being discarded.
 
 If you override `OPENCODE_ADVISOR_QUEUE_DIR`, it is treated as the queue directory itself rather than as a parent folder.
+
+Each advisor task has its own titled OpenCode session in the dedicated profile. Managed sessions are retained for 3 days by default, and terminal queue task files are retained for 7 days. Cleanup runs at most once every 6 hours in the dedicated profile; it never reads, modifies, compacts, or deletes the user's normal OpenCode database.
 
 ## Local Verification
 

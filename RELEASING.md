@@ -40,9 +40,9 @@ Verify package contents do not include:
 - `test/`, `scripts/`, `node_modules/`, or local tarballs
 - private absolute paths or machine-specific runtime artifacts
 
-## Publish In Exact Order
+## Source-Only GitHub Release
 
-Each numbered step is a separate external action and requires explicit authorization. Never rebuild the tarball after approval or move the tag ahead of registry verification.
+The current release path does not use the npm registry. Never rebuild the tarball after it has been verified, and never move a published tag.
 
 1. Record the fully verified release commit and require a clean checkout:
 
@@ -57,24 +57,39 @@ Each numbered step is a separate external action and requires explicit authoriza
    npm pack --json
    ```
 
-3. Publish the exact generated `.tgz`, not the working directory:
+3. Compute `SHA256SUMS.txt`, install the exact `.tgz` into a fresh temporary prefix, and smoke all four bins plus the MCP version and three-tool handshake.
 
-   ```powershell
-   npm publish .\opencode-advisor-mcp-0.3.0.tgz --access public
-   ```
+4. Create and push annotated tag `v0.3.0` at `$releaseCommit`, then verify the remote annotated tag dereferences to the same commit. Do not tag later documentation or cleanup commits.
 
-4. Verify npm registry metadata before creating any Git tag:
+5. Create one Draft GitHub Release from `v0.3.0`. Attach the exact `.tgz` and `SHA256SUMS.txt`, and state prominently that the package is source-only and not available from npm.
 
-   ```powershell
-   npm view opencode-advisor-mcp@0.3.0 version dist.integrity dist.tarball --json
-   ```
+6. Download both Draft assets into a new temporary directory. Verify the SHA-256 manifest, install the downloaded tarball into another fresh prefix, and repeat all four bin smokes plus the MCP handshake and doctor.
 
-   Install `opencode-advisor-mcp@0.3.0` into a fresh temporary prefix and smoke all four published bins. The registry version and integrity must match the approved tarball evidence.
+7. Publish that same Draft. Verify the public release remains attached to the intended tag and exposes the same asset IDs, sizes, and API digests. Record whether GitHub reports `immutable:true`.
 
-5. Create and push annotated tag `v0.3.0` at `$releaseCommit`, then verify the remote tag resolves to the same commit. Do not tag any later documentation or cleanup commit.
+8. If GitHub reports `immutable:false`, immediately anchor the exact release ID, asset IDs, filename, size, and SHA-256 in protected repository history and pin the expected digest in installation docs. A checksum downloaded beside the tarball is not an independent trust anchor.
 
-6. Create the GitHub Release from `v0.3.0` using the matching changelog section. The release must reference the already verified registry package and the same source commit.
+## Failure And Recovery Rules
+
+- Before tag push, stop on any failed check or hash mismatch; do not create external release state.
+- After tag push, never move, delete, or recreate the tag to conceal a failure. Retry the GitHub Release against the same tag.
+- Do not silently replace a published tarball or checksum asset. If released content is defective, document the problem and ship a new patch version.
+- When GitHub immutable releases are unavailable or disabled, treat the protected-history digest as authoritative and reject any later asset whose API digest, size, or ID no longer matches the recorded evidence.
+- A notes-only typo may be corrected without changing the tag or assets.
+
+## Future npm Publication
+
+npm publication is a separate optional release path and is not implied by a GitHub Release. Before using it, obtain explicit authorization and verify account identity, 2FA, package ownership, and exact tarball provenance.
+
+Future command shape:
+
+```powershell
+npm whoami
+npm publish .\opencode-advisor-mcp-<version>.tgz --access public --provenance
+```
+
+After publication, verify registry integrity and install the registry artifact into a new prefix before creating a release tag for that version.
 
 ## Authorization Boundaries
 
-Commit, push, merge pull requests, edit or close issues, perform npm identity/package-permission checks, publish, push a tag, and create a GitHub Release only after separate explicit authorization. Authorization for one step does not authorize a later step, and this document grants none of them.
+Commit, push, merge pull requests, edit or close issues, perform npm identity/package-permission checks, publish to npm, push a tag, and create or publish a GitHub Release only after explicit authorization. This document grants none of those permissions.

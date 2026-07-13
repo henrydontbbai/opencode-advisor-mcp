@@ -10,21 +10,40 @@ The provider does not need an OpenCode account or a normal-profile login session
 
 ## Package Install
 
-After `0.3.0` is published, install from the npm registry:
+Install the verified tarball attached to the [GitHub `v0.3.0` Release](https://github.com/henrydontbbai/opencode-advisor-mcp/releases/tag/v0.3.0). This release process did not publish to npm, and no npm-registry install path is supported for `v0.3.0`.
 
 ```powershell
-npm install -g opencode-advisor-mcp@0.3.0
+Invoke-WebRequest https://github.com/henrydontbbai/opencode-advisor-mcp/releases/download/v0.3.0/opencode-advisor-mcp-0.3.0.tgz -OutFile opencode-advisor-mcp-0.3.0.tgz
+Invoke-WebRequest https://github.com/henrydontbbai/opencode-advisor-mcp/releases/download/v0.3.0/SHA256SUMS.txt -OutFile SHA256SUMS.txt
+$expected = "47a4697ad28e99fd85ba2951ac21289a566378948743526f2b1cde5cbd905fa1"
+$manifest = (Get-Content .\SHA256SUMS.txt -Raw).Trim()
+if ($manifest -ne "$expected  opencode-advisor-mcp-0.3.0.tgz") { throw "Release manifest mismatch" }
+$actual = (Get-FileHash .\opencode-advisor-mcp-0.3.0.tgz -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "Release checksum mismatch" }
+npm install -g .\opencode-advisor-mcp-0.3.0.tgz
 opencode-advisor-setup
 ```
 
-For release-candidate validation, install the exact local packed tarball:
+On Bash-compatible systems:
+
+```bash
+curl -LO https://github.com/henrydontbbai/opencode-advisor-mcp/releases/download/v0.3.0/opencode-advisor-mcp-0.3.0.tgz
+curl -LO https://github.com/henrydontbbai/opencode-advisor-mcp/releases/download/v0.3.0/SHA256SUMS.txt
+expected='47a4697ad28e99fd85ba2951ac21289a566378948743526f2b1cde5cbd905fa1  opencode-advisor-mcp-0.3.0.tgz'
+test "$(tr -d '\r\n' < SHA256SUMS.txt)" = "$expected" || { echo "Release manifest mismatch" >&2; exit 1; }
+printf '%s\n' "$expected" | sha256sum -c -
+npm install -g ./opencode-advisor-mcp-0.3.0.tgz
+opencode-advisor-setup
+```
+
+For another local packed tarball, install that exact file:
 
 ```powershell
 npm install -g <path-to-opencode-advisor-mcp.tgz>
 opencode-advisor-setup
 ```
 
-For source development, install dependencies and run setup from the checkout:
+For source development or as a fallback, install dependencies and run setup from the checkout:
 
 ```powershell
 npm ci
@@ -46,7 +65,7 @@ If profile writing leaves incomplete artifacts or a binding mismatch, do not rep
 
 ## Codex MCP Entry
 
-Use [examples/codex-mcp.toml](../examples/codex-mcp.toml) for a globally installed tarball or published package:
+Use [examples/codex-mcp.toml](../examples/codex-mcp.toml) for a globally installed GitHub Release or local tarball:
 
 ```toml
 [mcp_servers.opencode_advisor]

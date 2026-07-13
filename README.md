@@ -10,21 +10,28 @@ The MCP server has exactly two built-in roles: `reviewer` and `planner`. It does
 
 ## Install And Configure
 
-After `0.3.0` is published, install the package from the npm registry and run the separate setup command:
+The current supported install path is the verified tarball attached to the [GitHub `v0.3.0` Release](https://github.com/henrydontbbai/opencode-advisor-mcp/releases/tag/v0.3.0). This release process did not publish to npm, and no npm-registry install path is supported for `v0.3.0`.
 
 ```powershell
-npm install -g opencode-advisor-mcp@0.3.0
+Invoke-WebRequest https://github.com/henrydontbbai/opencode-advisor-mcp/releases/download/v0.3.0/opencode-advisor-mcp-0.3.0.tgz -OutFile opencode-advisor-mcp-0.3.0.tgz
+Invoke-WebRequest https://github.com/henrydontbbai/opencode-advisor-mcp/releases/download/v0.3.0/SHA256SUMS.txt -OutFile SHA256SUMS.txt
+$expected = "47a4697ad28e99fd85ba2951ac21289a566378948743526f2b1cde5cbd905fa1"
+$manifest = (Get-Content .\SHA256SUMS.txt -Raw).Trim()
+if ($manifest -ne "$expected  opencode-advisor-mcp-0.3.0.tgz") { throw "Release manifest mismatch" }
+$actual = (Get-FileHash .\opencode-advisor-mcp-0.3.0.tgz -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "Release checksum mismatch" }
+npm install -g .\opencode-advisor-mcp-0.3.0.tgz
 opencode-advisor-setup
 ```
 
-For release-candidate validation, install the exact local packed tarball:
+For another local packed tarball, install that exact file:
 
 ```powershell
 npm install -g <path-to-opencode-advisor-mcp.tgz>
 opencode-advisor-setup
 ```
 
-For source development, install dependencies and run setup from the checkout:
+For source development or as a fallback, install dependencies and run setup from the checkout:
 
 ```powershell
 npm ci
@@ -52,7 +59,7 @@ tool_timeout_sec = 420
 OPENCODE_ADVISOR_ALLOWED_ROOTS = "C:\\workspace\\allowed-repositories"
 ```
 
-For a local tarball or published package installed globally, use `command = "opencode-advisor-mcp"`; [examples/codex-mcp.toml](examples/codex-mcp.toml) shows that installed-package form.
+For a GitHub Release or local tarball installed globally, use `command = "opencode-advisor-mcp"`; [examples/codex-mcp.toml](examples/codex-mcp.toml) shows that installed-package form.
 
 Do not put provider URLs, model IDs, API keys, tokens, or `OPENCODE_CONFIG_CONTENT` in the MCP configuration. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for non-secret runtime settings.
 

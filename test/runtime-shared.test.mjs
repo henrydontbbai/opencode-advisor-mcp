@@ -12,7 +12,6 @@ import {
   resolveOpencodeCommand,
   resolveOpencodeCommands,
   SUCCESS_RESPONSE_KEYS,
-  valueHasPattern,
 } from "../src/runtime-shared.mjs";
 
 test("createSuccessResponse returns the canonical public success shape", () => {

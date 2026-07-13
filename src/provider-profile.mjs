@@ -286,7 +286,7 @@ function overlaysMatch(expected, actual) {
   const withoutSchema = (overlay) => {
     if (!overlay || typeof overlay !== "object" || Array.isArray(overlay)) return overlay;
     if (overlay.$schema !== OPENCODE_SCHEMA_URL) return overlay;
-    const { $schema, ...rest } = overlay;
+    const { $schema: _schema, ...rest } = overlay;
     return rest;
   };
   return isDeepStrictEqual(withoutSchema(actual), withoutSchema(expected));

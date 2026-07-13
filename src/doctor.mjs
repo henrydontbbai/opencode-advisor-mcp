@@ -56,7 +56,7 @@ function valueContainsProviderSetting(value, profile) {
   return false;
 }
 
-export function findPayloadLeaks(payload, { role = "reviewer", cwd, profile } = {}) {
+export function findPayloadLeaks(payload, { role = "reviewer", profile } = {}) {
   const leaks = [];
   const allowedSuccessKeys = ALLOWED_SUCCESS_KEYS_BY_ROLE[role] ?? ALLOWED_SUCCESS_KEYS_BY_ROLE.reviewer;
 

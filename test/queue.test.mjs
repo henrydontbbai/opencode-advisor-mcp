@@ -23,7 +23,6 @@ import {
   readTaskFile,
   runQueueMaintenance,
   runQueueRunner,
-  sortByCreatedAt,
   writeTaskFile,
 } from "../src/task-queue.mjs";
 import { SETUP_GUIDANCE } from "../src/provider-profile.mjs";

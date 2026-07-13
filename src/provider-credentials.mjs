@@ -111,12 +111,12 @@ function hasOnlyKeys(value, keys) {
 function parseWindowsMetadata(text) {
   const value = parseStoredJson(text);
   if (
-    !hasOnlyKeys(value, ["version", "platform", "manifest_fingerprint", "ciphertext"])
-    || value.version !== CREDENTIAL_FORMAT_VERSION
-    || value.platform !== "win32"
-    || typeof value.ciphertext !== "string"
-    || value.ciphertext.length === 0
-    || value.ciphertext.length > MAX_STORED_TEXT_LENGTH
+    !hasOnlyKeys(value, ["version", "platform", "manifest_fingerprint", "ciphertext"]) ||
+    value.version !== CREDENTIAL_FORMAT_VERSION ||
+    value.platform !== "win32" ||
+    typeof value.ciphertext !== "string" ||
+    value.ciphertext.length === 0 ||
+    value.ciphertext.length > MAX_STORED_TEXT_LENGTH
   ) {
     throw credentialError();
   }
@@ -129,10 +129,10 @@ function parseWindowsMetadata(text) {
 function parsePosixMetadata(text) {
   const value = parseStoredJson(text);
   if (
-    !hasOnlyKeys(value, ["version", "platform", "encoding", "manifest_fingerprint", "credential"])
-    || value.version !== CREDENTIAL_FORMAT_VERSION
-    || value.platform !== "posix"
-    || value.encoding !== "base64"
+    !hasOnlyKeys(value, ["version", "platform", "encoding", "manifest_fingerprint", "credential"]) ||
+    value.version !== CREDENTIAL_FORMAT_VERSION ||
+    value.platform !== "posix" ||
+    value.encoding !== "base64"
   ) {
     throw credentialError();
   }
@@ -170,15 +170,11 @@ function runPowerShell(script, input, { env = process.env } = {}) {
     let child;
     let timer;
     try {
-      child = spawn(
-        getPowerShellExecutable(env),
-        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-        {
-          env: createHelperEnvironment(env),
-          stdio: ["pipe", "pipe", "pipe"],
-          windowsHide: true,
-        },
-      );
+      child = spawn(getPowerShellExecutable(env), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
+        env: createHelperEnvironment(env),
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
     } catch {
       reject(credentialError());
       return;
@@ -303,22 +299,30 @@ export async function writeProviderCredential({
       if (typeof ciphertext !== "string" || ciphertext.length === 0 || ciphertext === credential) {
         throw credentialError();
       }
-      await writeAtomically(credentialPath, {
-        version: CREDENTIAL_FORMAT_VERSION,
-        platform: "win32",
-        manifest_fingerprint: manifestFingerprint,
-        ciphertext,
-      }, platform);
+      await writeAtomically(
+        credentialPath,
+        {
+          version: CREDENTIAL_FORMAT_VERSION,
+          platform: "win32",
+          manifest_fingerprint: manifestFingerprint,
+          ciphertext,
+        },
+        platform,
+      );
       return;
     }
 
-    await writeAtomically(credentialPath, {
-      version: CREDENTIAL_FORMAT_VERSION,
-      platform: "posix",
-      encoding: "base64",
-      manifest_fingerprint: manifestFingerprint,
-      credential: Buffer.from(credential, "utf8").toString("base64"),
-    }, platform);
+    await writeAtomically(
+      credentialPath,
+      {
+        version: CREDENTIAL_FORMAT_VERSION,
+        platform: "posix",
+        encoding: "base64",
+        manifest_fingerprint: manifestFingerprint,
+        credential: Buffer.from(credential, "utf8").toString("base64"),
+      },
+      platform,
+    );
   } catch (error) {
     if (error?.code === CREDENTIAL_ERROR_CODE) throw error;
     throw credentialError("Provider credential could not be stored securely.");

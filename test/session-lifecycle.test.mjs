@@ -31,36 +31,45 @@ test("managed session ownership records are atomic, private, path-safe, and mini
   const sessionId = "ses_path/unsafe?provider-key";
   const title = createManagedSessionTitle(createManagedSessionOwnerId("direct-reviewer"));
 
-  await Promise.all(Array.from({ length: 8 }, () => recordManagedSession({
-    queueDir,
-    sessionId,
-    cwd: "/repo",
-    title,
-    observedAt: "2026-07-13T00:00:00.000Z",
-    providerKey: "must-not-persist",
-    baseUrl: "https://provider.example.test/v1",
-    model: "private-model",
-  })));
+  await Promise.all(
+    Array.from({ length: 8 }, () =>
+      recordManagedSession({
+        queueDir,
+        sessionId,
+        cwd: "/repo",
+        title,
+        observedAt: "2026-07-13T00:00:00.000Z",
+        providerKey: "must-not-persist",
+        baseUrl: "https://provider.example.test/v1",
+        model: "private-model",
+      }),
+    ),
+  );
 
   const registryDir = path.join(queueDir, "_sessions");
   const files = readdirSync(registryDir);
   assert.equal(files.length, 1);
   assert.equal(files[0].endsWith(".json"), true);
   assert.equal(files[0].includes(sessionId), false);
-  assert.equal(files.some((name) => name.endsWith(".tmp")), false);
+  assert.equal(
+    files.some((name) => name.endsWith(".tmp")),
+    false,
+  );
   const persistedText = await fs.readFile(path.join(registryDir, files[0]), "utf8");
   assert.equal(persistedText.includes("must-not-persist"), false);
   assert.equal(persistedText.includes("provider.example.test"), false);
   assert.equal(persistedText.includes("private-model"), false);
 
   const records = await listManagedSessionRecords(queueDir);
-  assert.deepEqual(records, [{
-    version: 1,
-    session_id: sessionId,
-    cwd: "/repo",
-    title,
-    observed_at: "2026-07-13T00:00:00.000Z",
-  }]);
+  assert.deepEqual(records, [
+    {
+      version: 1,
+      session_id: sessionId,
+      cwd: "/repo",
+      title,
+      observed_at: "2026-07-13T00:00:00.000Z",
+    },
+  ]);
   assert.deepEqual(Object.keys(records[0]), ["version", "session_id", "cwd", "title", "observed_at"]);
 
   if (process.platform !== "win32") {
@@ -77,13 +86,17 @@ test("managed session registry skips corrupt and forged records without deleting
   const registryDir = path.join(queueDir, "_sessions");
   await fs.mkdir(registryDir, { recursive: true });
   await fs.writeFile(path.join(registryDir, "corrupt.json"), "{", "utf8");
-  await fs.writeFile(path.join(registryDir, "forged.json"), JSON.stringify({
-    version: 1,
-    session_id: "ses_forged",
-    cwd: "/repo",
-    title: "normal user session",
-    observed_at: "2026-07-13T00:00:00.000Z",
-  }), "utf8");
+  await fs.writeFile(
+    path.join(registryDir, "forged.json"),
+    JSON.stringify({
+      version: 1,
+      session_id: "ses_forged",
+      cwd: "/repo",
+      title: "normal user session",
+      observed_at: "2026-07-13T00:00:00.000Z",
+    }),
+    "utf8",
+  );
 
   assert.deepEqual(await listManagedSessionRecords(queueDir), []);
   assert.deepEqual(readdirSync(registryDir).sort(), ["corrupt.json", "forged.json"]);
@@ -143,13 +156,15 @@ test("managed session registry replaces an older observation with newer metadata
     observedAt: "2026-07-13T02:00:00.000Z",
   });
 
-  assert.deepEqual(await listManagedSessionRecords(queueDir), [{
-    version: 1,
-    session_id: sessionId,
-    cwd: "/repo/new",
-    title: "opencode-advisor:direct_new",
-    observed_at: "2026-07-13T02:00:00.000Z",
-  }]);
+  assert.deepEqual(await listManagedSessionRecords(queueDir), [
+    {
+      version: 1,
+      session_id: sessionId,
+      cwd: "/repo/new",
+      title: "opencode-advisor:direct_new",
+      observed_at: "2026-07-13T02:00:00.000Z",
+    },
+  ]);
 });
 
 test("managed session registry retries replacement contention instead of accepting an older record", async () => {
@@ -175,16 +190,19 @@ test("managed session registry retries replacement contention instead of accepti
     return fs.rename(...args);
   };
 
-  await recordManagedSession({
-    queueDir,
-    sessionId,
-    cwd: "/repo/new",
-    title: createManagedSessionTitle("direct_new"),
-    observedAt: "2026-07-13T02:00:00.000Z",
-  }, {
-    fs: fsImpl,
-    sleep: async () => {},
-  });
+  await recordManagedSession(
+    {
+      queueDir,
+      sessionId,
+      cwd: "/repo/new",
+      title: createManagedSessionTitle("direct_new"),
+      observedAt: "2026-07-13T02:00:00.000Z",
+    },
+    {
+      fs: fsImpl,
+      sleep: async () => {},
+    },
+  );
 
   assert.equal(renameAttempts, 3);
   assert.equal((await listManagedSessionRecords(queueDir))[0].observed_at, "2026-07-13T02:00:00.000Z");

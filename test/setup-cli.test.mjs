@@ -92,18 +92,21 @@ test("setup writes a non-secret profile and passes the API key only to credentia
   assert.equal(stderr.text, "");
   assert.equal(stdout.text.includes(secret), false);
   assert.equal(stderr.text.includes(secret), false);
-  assert.deepEqual(prompt.calls.map((call) => call.field), [
-    "providerId",
-    "providerName",
-    "baseUrl",
-    "transport",
-    "models",
-    "reviewerModel",
-    "reviewerVariant",
-    "plannerModel",
-    "plannerVariant",
-    "apiKey",
-  ]);
+  assert.deepEqual(
+    prompt.calls.map((call) => call.field),
+    [
+      "providerId",
+      "providerName",
+      "baseUrl",
+      "transport",
+      "models",
+      "reviewerModel",
+      "reviewerVariant",
+      "plannerModel",
+      "plannerVariant",
+      "apiKey",
+    ],
+  );
   assert.deepEqual(prompt.calls.at(-1), { field: "apiKey", hidden: true });
   assert.equal(dependencies.profileWrites.length, 1);
   assert.deepEqual(dependencies.profileWrites[0].config, {
@@ -127,12 +130,14 @@ test("setup writes a non-secret profile and passes the API key only to credentia
     "codex-advisor.md": "reviewer template",
     "codex-planning-partner.md": "planner template",
   });
-  assert.deepEqual(dependencies.credentialWrites, [{
+  assert.deepEqual(dependencies.credentialWrites, [
+    {
       credentialPath: "/private/advisor/provider-credential.json",
       credential: secret,
       manifestFingerprint: "a".repeat(43),
       platform: "linux",
-  }]);
+    },
+  ]);
   assert.equal(JSON.stringify(dependencies.profileWrites).includes(secret), false);
 });
 

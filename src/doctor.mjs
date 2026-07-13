@@ -38,7 +38,8 @@ const DIRECT_AGENT_CHECKS = [
   { role: "reviewer", agentName: "codex-advisor", label: "Direct OpenCode review agent check" },
   { role: "planner", agentName: "codex-planning-partner", label: "Direct OpenCode planning agent check" },
 ];
-const PROVIDER_AUTHENTICATION_PATTERN = /\b401\b|unauthori[sz]ed|invalid (?:api )?(?:key|token)|authentication (?:failed|required)|invalid token/i;
+const PROVIDER_AUTHENTICATION_PATTERN =
+  /\b401\b|unauthori[sz]ed|invalid (?:api )?(?:key|token)|authentication (?:failed|required)|invalid token/i;
 
 const runCommand = runProcess;
 
@@ -138,17 +139,21 @@ export function formatDoctorReport(report) {
 }
 
 export function formatDoctorJsonReport(report) {
-  return JSON.stringify({
-    ok: report.ok,
-    bucket: report.bucket,
-    steps: report.steps.map((step) => ({
-      id: step.id,
-      label: step.label,
-      ok: step.ok,
-      detail: step.detail,
-    })),
-    summary: report.summary,
-  }, null, 2);
+  return JSON.stringify(
+    {
+      ok: report.ok,
+      bucket: report.bucket,
+      steps: report.steps.map((step) => ({
+        id: step.id,
+        label: step.label,
+        ok: step.ok,
+        detail: step.detail,
+      })),
+      summary: report.summary,
+    },
+    null,
+    2,
+  );
 }
 
 async function runDirectAgentCheck({
@@ -205,7 +210,10 @@ async function runDirectAgentCheck({
         id: agentName,
         label,
         ok: false,
-        detail: bucket === "opencode_not_found" ? "OpenCode command could not be started" : "OpenCode command failed to start",
+        detail:
+          bucket === "opencode_not_found"
+            ? "OpenCode command could not be started"
+            : "OpenCode command failed to start",
       },
       summary: "OpenCode command could not be started",
     };
@@ -386,22 +394,42 @@ export async function runDoctor({
   }
 
   if (!preflight.ok) {
-    const bucket = preflight.error === "invalid_cwd"
-      ? "invalid_cwd_or_allowed_roots"
-      : preflight.error === "opencode_failed" && preflight.message === SETUP_GUIDANCE
-        ? "provider_setup_required"
-        : "generic_opencode_failure";
+    const bucket =
+      preflight.error === "invalid_cwd"
+        ? "invalid_cwd_or_allowed_roots"
+        : preflight.error === "opencode_failed" && preflight.message === SETUP_GUIDANCE
+          ? "provider_setup_required"
+          : "generic_opencode_failure";
     steps.push({
-      id: bucket === "provider_setup_required" ? "provider-profile" : bucket === "invalid_cwd_or_allowed_roots" ? "allowed-roots" : "preflight",
-      label: bucket === "provider_setup_required" ? "Independent provider profile" : bucket === "invalid_cwd_or_allowed_roots" ? "Allowed working directory" : "Doctor preflight",
+      id:
+        bucket === "provider_setup_required"
+          ? "provider-profile"
+          : bucket === "invalid_cwd_or_allowed_roots"
+            ? "allowed-roots"
+            : "preflight",
+      label:
+        bucket === "provider_setup_required"
+          ? "Independent provider profile"
+          : bucket === "invalid_cwd_or_allowed_roots"
+            ? "Allowed working directory"
+            : "Doctor preflight",
       ok: false,
-      detail: bucket === "provider_setup_required" ? SETUP_GUIDANCE : bucket === "invalid_cwd_or_allowed_roots" ? "cwd is outside configured allowed roots" : "Doctor preflight failed",
+      detail:
+        bucket === "provider_setup_required"
+          ? SETUP_GUIDANCE
+          : bucket === "invalid_cwd_or_allowed_roots"
+            ? "cwd is outside configured allowed roots"
+            : "Doctor preflight failed",
     });
-    return buildFailureReport(bucket, steps, bucket === "provider_setup_required"
-      ? "Independent provider setup is required"
-      : bucket === "invalid_cwd_or_allowed_roots"
-        ? "Doctor cwd is outside configured allowed roots"
-        : "Doctor preflight failed");
+    return buildFailureReport(
+      bucket,
+      steps,
+      bucket === "provider_setup_required"
+        ? "Independent provider setup is required"
+        : bucket === "invalid_cwd_or_allowed_roots"
+          ? "Doctor cwd is outside configured allowed roots"
+          : "Doctor preflight failed",
+    );
   }
 
   profile = preflight.normalized.profile;
@@ -462,13 +490,14 @@ export async function runDoctor({
       model: `${profile.config.provider.id}/${profile.config.roles[directCheck.role].model}`,
       variant: profile.config.roles[directCheck.role].variant,
       title,
-      onSessionId: (sessionId, metadata) => recordManagedSessionImpl({
-        queueDir,
-        sessionId,
-        cwd: metadata.cwd,
-        title: metadata.title,
-        observedAt: metadata.observedAt,
-      }),
+      onSessionId: (sessionId, metadata) =>
+        recordManagedSessionImpl({
+          queueDir,
+          sessionId,
+          cwd: metadata.cwd,
+          title: metadata.title,
+          observedAt: metadata.observedAt,
+        }),
       ...directCheck,
     });
     steps.push(result.step);
@@ -522,7 +551,11 @@ export async function runDoctor({
       ok: false,
       detail: `forbidden fields or path leaks: ${advisorLeaks.join(", ")}`,
     });
-    return buildFailureReport("generic_opencode_failure", steps, `Forbidden success payload leaks: ${advisorLeaks.join(", ")}`);
+    return buildFailureReport(
+      "generic_opencode_failure",
+      steps,
+      `Forbidden success payload leaks: ${advisorLeaks.join(", ")}`,
+    );
   }
 
   steps.push({
@@ -578,7 +611,11 @@ export async function runDoctor({
       ok: false,
       detail: `forbidden fields or path leaks: ${plannerLeaks.join(", ")}`,
     });
-    return buildFailureReport("generic_opencode_failure", steps, `Forbidden planner success payload leaks: ${plannerLeaks.join(", ")}`);
+    return buildFailureReport(
+      "generic_opencode_failure",
+      steps,
+      `Forbidden planner success payload leaks: ${plannerLeaks.join(", ")}`,
+    );
   }
 
   steps.push({

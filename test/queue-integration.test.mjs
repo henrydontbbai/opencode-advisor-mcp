@@ -1,17 +1,18 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync as createTempDirOnDisk, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync as createTempDirOnDisk,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  createTaskFile,
-  ensureQueueRunner,
-  readTaskFile,
-  runQueueRunner,
-  writeTaskFile,
-} from "../src/task-queue.mjs";
+import { createTaskFile, ensureQueueRunner, readTaskFile, runQueueRunner, writeTaskFile } from "../src/task-queue.mjs";
 
 const tempDirs = new Set();
 const STARTUP_WORKER = fileURLToPath(new URL("./fixtures/queue-startup-worker.mjs", import.meta.url));
@@ -54,10 +55,7 @@ test("separate server processes start only one runner before a lease is publishe
   const queueDir = createTempDir("ocq-startup-processes-");
   const spawnLog = path.join(queueDir, "spawn.log");
 
-  await Promise.all([
-    runStartupWorker(queueDir, spawnLog),
-    runStartupWorker(queueDir, spawnLog),
-  ]);
+  await Promise.all([runStartupWorker(queueDir, spawnLog), runStartupWorker(queueDir, spawnLog)]);
 
   const spawns = readFileSync(spawnLog, "utf8").trim().split(/\r?\n/).filter(Boolean);
   assert.equal(spawns.length, 1);
@@ -67,14 +65,15 @@ test("separate server processes reclaim one stale startup reservation before a l
   const queueDir = createTempDir("ocq-stale-startup-processes-");
   const spawnLog = path.join(queueDir, "spawn.log");
   const markerPath = path.join(queueDir, "_runner.starting");
-  writeFileSync(markerPath, `${JSON.stringify({ id: "stale-startup-token", started_at: new Date(0).toISOString() })}\n`, "utf8");
+  writeFileSync(
+    markerPath,
+    `${JSON.stringify({ id: "stale-startup-token", started_at: new Date(0).toISOString() })}\n`,
+    "utf8",
+  );
   const staleDate = new Date(Date.now() - 1100);
   utimesSync(markerPath, staleDate, staleDate);
 
-  await Promise.all([
-    runStartupWorker(queueDir, spawnLog, "1"),
-    runStartupWorker(queueDir, spawnLog, "1"),
-  ]);
+  await Promise.all([runStartupWorker(queueDir, spawnLog, "1"), runStartupWorker(queueDir, spawnLog, "1")]);
 
   const spawns = readFileSync(spawnLog, "utf8").trim().split(/\r?\n/).filter(Boolean);
   assert.equal(spawns.length, 1);
@@ -85,11 +84,14 @@ test("a runner acknowledges its startup reservation after it acquires a lease", 
   const startupToken = "startup-reservation-token";
   const markerPath = path.join(queueDir, "_runner.starting");
   writeFileSync(markerPath, `${JSON.stringify({ id: startupToken, started_at: new Date().toISOString() })}\n`, "utf8");
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_startupack",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "acknowledge startup" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_startupack",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "acknowledge startup" },
+    }),
+  );
 
   const result = await runQueueRunner({
     env: {
@@ -291,11 +293,14 @@ test("runQueueRunner recovers a stale running task after a crashed runner", asyn
 
 test("runQueueRunner recovers an orphaned stale lock without a readable owner record", async () => {
   const queueDir = createTempDir("ocq-orphaned-lock-");
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_orphanedlock",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "recover orphaned lock" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_orphanedlock",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "recover orphaned lock" },
+    }),
+  );
   writeFileSync(path.join(queueDir, "_runner.lock"), "{", "utf8");
   const oldDate = new Date(Date.now() - 5000);
   utimesSync(path.join(queueDir, "_runner.lock"), oldDate, oldDate);
@@ -331,11 +336,14 @@ test("runQueueRunner recovers an orphaned stale lock without a readable owner re
 
 test("two runner processes execute a queued task exactly once", async () => {
   const queueDir = createTempDir("ocq-two-runners-");
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_two_runners",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "single owner" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_two_runners",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "single owner" },
+    }),
+  );
 
   const firstSeen = [];
   const secondSeen = [];

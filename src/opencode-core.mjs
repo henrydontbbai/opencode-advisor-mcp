@@ -31,7 +31,8 @@ const PROCESS_TERMINATION_FORCE_GRACE_MS = 100;
 const PROCESS_TERMINATION_SETTLE_GRACE_MS = 100;
 const PEM_BLOCK_PATTERN = /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g;
 const SECRET_TOKEN_PATTERN = /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b/g;
-const SECRET_ASSIGNMENT_PATTERN = /^([+\- ]?(?:.*?(?:token|secret|api[_-]?key|password|pass|private[_-]?key|access[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*))(.*)$/gim;
+const SECRET_ASSIGNMENT_PATTERN =
+  /^([+\- ]?(?:.*?(?:token|secret|api[_-]?key|password|pass|private[_-]?key|access[_-]?key)[A-Za-z0-9_-]*\s*[:=]\s*))(.*)$/gim;
 const INPUT_LIMITS = Object.freeze({
   cwd: 4 * 1024,
   question: 16 * 1024,
@@ -55,7 +56,7 @@ function splitAllowedRootEntries(source) {
   let quoted = false;
 
   for (const character of source) {
-    if (character === "\"") {
+    if (character === '"') {
       quoted = !quoted;
     } else if (character === ";" && !quoted) {
       entries.push(current);
@@ -90,7 +91,9 @@ export function isPathInsideAllowedRoots(candidate, allowedRoots = parseAllowedR
 
   return allowedRoots.some((root) => {
     const rootResolved = pathApi.resolve(root);
-    const comparableRoot = caseInsensitive ? rootResolved.normalize("NFC").toLowerCase() : rootResolved.normalize("NFC");
+    const comparableRoot = caseInsensitive
+      ? rootResolved.normalize("NFC").toLowerCase()
+      : rootResolved.normalize("NFC");
     const rootPrefix = comparableRoot.endsWith(pathApi.sep) ? comparableRoot : `${comparableRoot}${pathApi.sep}`;
     return comparableResolved === comparableRoot || comparableResolved.startsWith(rootPrefix);
   });
@@ -161,8 +164,8 @@ function inputLimitMessage(input = {}) {
   }
 
   if (
-    input.max_diff_chars != null
-    && (!Number.isFinite(input.max_diff_chars) || input.max_diff_chars > INPUT_LIMITS.maxDiffChars)
+    input.max_diff_chars != null &&
+    (!Number.isFinite(input.max_diff_chars) || input.max_diff_chars > INPUT_LIMITS.maxDiffChars)
   ) {
     return `max_diff_chars must be at most ${INPUT_LIMITS.maxDiffChars}`;
   }
@@ -256,7 +259,9 @@ export function extractOpenCodeText(stdout) {
   }
 
   const text = textParts.length > 0 ? textParts.join("") : fallbackLines.join("\n").trim();
-  return stripModelReasoning(text).replace(/[ \t]{2,}/g, " ").trim();
+  return stripModelReasoning(text)
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
 function appendOutput(output, chunk, maxChars = DEFAULT_MAX_PROCESS_OUTPUT_CHARS) {
@@ -443,7 +448,7 @@ export function runProcess(
       settle(reject, () => error);
     });
     child.on("error", (error) => {
-      settle(reject, () => childSpawned ? error : markProcessLaunchError(error));
+      settle(reject, () => (childSpawned ? error : markProcessLaunchError(error)));
     });
     child.on("close", (code) => {
       settle(resolve, () => createResult(code));
@@ -455,9 +460,10 @@ export function runProcess(
       settle(reject, () => error);
     };
     child.stdin.on("error", handleStdinError);
-    if (input) child.stdin.write(input, (error) => {
-      if (error) handleStdinError(error);
-    });
+    if (input)
+      child.stdin.write(input, (error) => {
+        if (error) handleStdinError(error);
+      });
     child.stdin.end((error) => {
       if (error) handleStdinError(error);
     });
@@ -671,10 +677,7 @@ function buildRuntime(deps = {}) {
     loadAdvisorProfile: deps.loadAdvisorProfile ?? deps.runProcess?.loadAdvisorProfile ?? loadAdvisorProfile,
   };
   runtime.path = deps.path ?? pathForPlatform(runtime.platform);
-  runtime.realpath = deps.realpath
-    ?? deps.runProcess?.realpath
-    ?? deps.taskQueue?.realpath
-    ?? fs.realpath;
+  runtime.realpath = deps.realpath ?? deps.runProcess?.realpath ?? deps.taskQueue?.realpath ?? fs.realpath;
   return runtime;
 }
 
@@ -686,13 +689,17 @@ async function canonicalizeAllowedCwd(cwd, allowedRoots, runtime) {
     return null;
   }
 
-  const canonicalRoots = (await Promise.all(allowedRoots.map(async (root) => {
-    try {
-      return await runtime.realpath(root);
-    } catch {
-      return null;
-    }
-  }))).filter(Boolean);
+  const canonicalRoots = (
+    await Promise.all(
+      allowedRoots.map(async (root) => {
+        try {
+          return await runtime.realpath(root);
+        } catch {
+          return null;
+        }
+      }),
+    )
+  ).filter(Boolean);
 
   if (!isPathInsideAllowedRoots(canonicalCwd, canonicalRoots, runtime.path)) {
     return null;
@@ -823,18 +830,8 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
     return preflight;
   }
 
-  const {
-    runtime,
-    roleDefaults,
-    cwd,
-    includeStatus,
-    includeDiff,
-    baseRef,
-    paths,
-    timeoutMs,
-    maxDiffChars,
-    profile,
-  } = preflight.normalized;
+  const { runtime, roleDefaults, cwd, includeStatus, includeDiff, baseRef, paths, timeoutMs, maxDiffChars, profile } =
+    preflight.normalized;
 
   let context;
   try {
@@ -933,11 +930,13 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
   let spawnError;
   for (const command of commands) {
     try {
-      result = await runtime.runProcess(
-        command,
-        commandArgs,
-        { cwd, input: prompt, timeoutMs, env: childEnv, platform: runtime.platform },
-      );
+      result = await runtime.runProcess(command, commandArgs, {
+        cwd,
+        input: prompt,
+        timeoutMs,
+        env: childEnv,
+        platform: runtime.platform,
+      });
       break;
     } catch (error) {
       spawnError = error;
@@ -948,7 +947,9 @@ export async function runOpenCodeTaskNow(role, input = {}, deps = {}) {
     return {
       ok: false,
       error: isProcessLaunchError(spawnError) ? "opencode_not_found" : "opencode_failed",
-      message: isProcessLaunchError(spawnError) ? OPENCODE_NOT_FOUND_MESSAGE : "OpenCode process failed during execution.",
+      message: isProcessLaunchError(spawnError)
+        ? OPENCODE_NOT_FOUND_MESSAGE
+        : "OpenCode process failed during execution.",
       details: {},
     };
   }

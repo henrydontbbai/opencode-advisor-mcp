@@ -6,12 +6,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 
-const packageJson = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-);
-const packageLock = JSON.parse(
-  readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"),
-);
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const packageLock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const installDoc = readFileSync(new URL("../docs/INSTALL.md", import.meta.url), "utf8");
 const usageDoc = readFileSync(new URL("../docs/USAGE.md", import.meta.url), "utf8");
@@ -26,10 +22,7 @@ const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.me
 const serverSource = readFileSync(new URL("../src/server.mjs", import.meta.url), "utf8");
 const serverTestSource = readFileSync(new URL("./server.test.mjs", import.meta.url), "utf8");
 const repoRoot = new URL("../", import.meta.url);
-const testRunnerScript = readFileSync(
-  new URL("../scripts/run-test-files.mjs", import.meta.url),
-  "utf8",
-);
+const testRunnerScript = readFileSync(new URL("../scripts/run-test-files.mjs", import.meta.url), "utf8");
 const publishedMarkdown = [
   { path: "README.md", text: readme },
   ...readdirSync(new URL("../docs/", import.meta.url))
@@ -59,20 +52,10 @@ function resolveNpmInvocation({
   npmExecPath = process.env.npm_execpath,
   isFile = isRegularFile,
 } = {}) {
-  const bundledNpmCli = join(
-    dirname(nodeExecPath),
-    "node_modules",
-    "npm",
-    "bin",
-    "npm-cli.js",
-  );
+  const bundledNpmCli = join(dirname(nodeExecPath), "node_modules", "npm", "bin", "npm-cli.js");
 
   for (const npmCliPath of [bundledNpmCli, npmExecPath]) {
-    if (
-      typeof npmCliPath === "string"
-      && basename(npmCliPath) === "npm-cli.js"
-      && isFile(npmCliPath)
-    ) {
+    if (typeof npmCliPath === "string" && basename(npmCliPath) === "npm-cli.js" && isFile(npmCliPath)) {
       return { command: nodeExecPath, args: [npmCliPath] };
     }
   }
@@ -134,10 +117,7 @@ function readPublishedTarball() {
 }
 
 test("package contract npm launcher requires a verified Node CLI without a shell fallback", () => {
-  const nodeExecPath = join(
-    "test-node-home",
-    process.platform === "win32" ? "node.exe" : "node",
-  );
+  const nodeExecPath = join("test-node-home", process.platform === "win32" ? "node.exe" : "node");
   const npmExecPath = join("test-npm", "npm-cli.js");
 
   assert.deepEqual(
@@ -150,46 +130,46 @@ test("package contract npm launcher requires a verified Node CLI without a shell
   );
   let isFileCalled = false;
   assert.throws(
-    () => resolveNpmInvocation({
-      nodeExecPath,
-      npmExecPath,
-      isFile: () => {
-        isFileCalled = true;
-        return false;
-      },
-    }),
+    () =>
+      resolveNpmInvocation({
+        nodeExecPath,
+        npmExecPath,
+        isFile: () => {
+          isFileCalled = true;
+          return false;
+        },
+      }),
     /Unable to locate a verified npm CLI/,
   );
   assert.equal(isFileCalled, true);
 });
 
 test("package contract npm launcher rejects directory and non-JS CLI candidates", () => {
-  const missingNodeExecPath = join(
-    "missing-node-home",
-    process.platform === "win32" ? "node.exe" : "node",
-  );
+  const missingNodeExecPath = join("missing-node-home", process.platform === "win32" ? "node.exe" : "node");
   const directoryLikeCandidate = join("test-directory", "npm-cli.js");
   const checkedCandidates = [];
 
   assert.throws(
-    () => resolveNpmInvocation({
-      nodeExecPath: missingNodeExecPath,
-      npmExecPath: directoryLikeCandidate,
-      isFile: (candidate) => {
-        checkedCandidates.push(candidate);
-        return false;
-      },
-    }),
+    () =>
+      resolveNpmInvocation({
+        nodeExecPath: missingNodeExecPath,
+        npmExecPath: directoryLikeCandidate,
+        isFile: (candidate) => {
+          checkedCandidates.push(candidate);
+          return false;
+        },
+      }),
     /Unable to locate a verified npm CLI/,
   );
   assert.equal(checkedCandidates.includes(directoryLikeCandidate), true);
 
   assert.throws(
-    () => resolveNpmInvocation({
-      nodeExecPath: missingNodeExecPath,
-      npmExecPath: process.execPath,
-      isFile: (candidate) => candidate === process.execPath,
-    }),
+    () =>
+      resolveNpmInvocation({
+        nodeExecPath: missingNodeExecPath,
+        npmExecPath: process.execPath,
+        isFile: (candidate) => candidate === process.execPath,
+      }),
     /Unable to locate a verified npm CLI/,
   );
 });
@@ -229,21 +209,12 @@ test("package.json is the single source for the advertised server version", () =
     assert.match(`version: "${version}"`, literalServerVersionPattern);
   }
   assert.doesNotMatch(serverSource, literalServerVersionPattern);
-  assert.match(
-    changelog,
-    new RegExp(`^## ${packageJson.version.replaceAll(".", "\\.")} - \\d{4}-\\d{2}-\\d{2}$`, "m"),
-  );
+  assert.match(changelog, new RegExp(`^## ${packageJson.version.replaceAll(".", "\\.")} - \\d{4}-\\d{2}-\\d{2}$`, "m"));
 });
 
 test("setup and doctor are published as separate non-MCP CLIs", () => {
-  assert.equal(
-    packageJson.bin["opencode-advisor-setup"],
-    "bin/opencode-advisor-setup.mjs",
-  );
-  assert.equal(
-    packageJson.bin["opencode-advisor-doctor"],
-    "bin/opencode-advisor-doctor.mjs",
-  );
+  assert.equal(packageJson.bin["opencode-advisor-setup"], "bin/opencode-advisor-setup.mjs");
+  assert.equal(packageJson.bin["opencode-advisor-doctor"], "bin/opencode-advisor-doctor.mjs");
   assert.equal(
     packageJson.files.some((entry) => entry === "test/" || entry.startsWith("test")),
     false,
@@ -273,17 +244,10 @@ test("published docs require independent provider setup and exclude legacy profi
   for (const { path, text } of publishedExamples) {
     assert.doesNotMatch(text, /opencode auth login/i, path);
     assert.doesNotMatch(text, /OPENCODE_ADVISOR_OPENCODE_DATA_HOME/, path);
-    assert.doesNotMatch(
-      text,
-      /OPENCODE_CONFIG|api[_-]?key|\b(?:url|model|key|token|credential)\b/i,
-      path,
-    );
+    assert.doesNotMatch(text, /OPENCODE_CONFIG|api[_-]?key|\b(?:url|model|key|token|credential)\b/i, path);
   }
 
-  assert.equal(
-    existsSync(new URL("../docs/opencode-advisor.example.toml", import.meta.url)),
-    false,
-  );
+  assert.equal(existsSync(new URL("../docs/opencode-advisor.example.toml", import.meta.url)), false);
   assert.match(configurationDoc, /OPENCODE_ADVISOR_ALLOWED_ROOTS/);
   assert.match(configurationDoc, /OPENCODE_ADVISOR_HOME/);
   assert.match(architectureDoc, /OPENCODE_CONFIG_CONTENT/);
@@ -375,20 +339,14 @@ test("real tarball contents stay aligned with the published package contract", (
     assert.equal(packedFiles.includes(required), true);
   }
 
-  for (const forbiddenPrefix of [
-    "scripts/",
-    "test/",
-    ".github/",
-    ".worktrees/",
-    "node_modules/",
-  ]) {
-    assert.equal(packedFiles.some((entry) => entry.startsWith(forbiddenPrefix)), false);
+  for (const forbiddenPrefix of ["scripts/", "test/", ".github/", ".worktrees/", "node_modules/"]) {
+    assert.equal(
+      packedFiles.some((entry) => entry.startsWith(forbiddenPrefix)),
+      false,
+    );
   }
 
-  for (const forbiddenName of [
-    "package-lock.json",
-    "issue-release.yml",
-  ]) {
+  for (const forbiddenName of ["package-lock.json", "issue-release.yml"]) {
     assert.equal(packedFiles.includes(forbiddenName), false);
   }
 
@@ -403,7 +361,10 @@ test("real tarball contents stay aligned with the published package contract", (
   const packedExamples = packedFiles
     .filter((entry) => /^examples\//.test(entry))
     .map((entry) => ({ path: entry, text: packedContents.get(entry) }));
-  assert.deepEqual(packedExamples.map(({ path }) => path), ["examples/codex-mcp.toml"]);
+  assert.deepEqual(
+    packedExamples.map(({ path }) => path),
+    ["examples/codex-mcp.toml"],
+  );
   for (const { path, text } of packedExamples) {
     assert.doesNotMatch(text, /OPENCODE_CONFIG|api[_-]?key|\b(?:url|model|key|token|credential)\b/i, path);
   }

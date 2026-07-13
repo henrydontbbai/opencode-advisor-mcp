@@ -28,11 +28,13 @@ function normalizeObservedAt(value) {
 }
 
 function isValidSessionId(value) {
-  return typeof value === "string"
-    && value.length > 0
-    && value.length <= 512
-    && !value.startsWith("-")
-    && !/[\0-\x1f\x7f]/.test(value);
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    !value.startsWith("-") &&
+    !/[\0-\x1f\x7f]/.test(value)
+  );
 }
 
 function normalizeRecord({ sessionId, cwd, title, observedAt }) {
@@ -43,9 +45,9 @@ function normalizeRecord({ sessionId, cwd, title, observedAt }) {
     throw new TypeError("Managed session cwd is invalid.");
   }
   if (
-    typeof title !== "string"
-    || !title.startsWith(MANAGED_SESSION_TITLE_PREFIX)
-    || !OWNER_ID_PATTERN.test(title.slice(MANAGED_SESSION_TITLE_PREFIX.length))
+    typeof title !== "string" ||
+    !title.startsWith(MANAGED_SESSION_TITLE_PREFIX) ||
+    !OWNER_ID_PATTERN.test(title.slice(MANAGED_SESSION_TITLE_PREFIX.length))
   ) {
     throw new TypeError("Managed session title is invalid.");
   }
@@ -148,10 +150,7 @@ export async function recordManagedSession(
         } catch (error) {
           if (!["EACCES", "EPERM"].includes(error?.code)) throw error;
           const concurrent = await readRecordIfValid(queueDir, sessionId, fsImpl);
-          if (
-            concurrent
-            && Date.parse(concurrent.observed_at) >= Date.parse(record.observed_at)
-          ) {
+          if (concurrent && Date.parse(concurrent.observed_at) >= Date.parse(record.observed_at)) {
             return concurrent;
           }
           if (attempt === 4) throw error;

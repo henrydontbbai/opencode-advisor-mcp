@@ -4,10 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import os from "node:os";
 import path from "node:path";
 
-import {
-  readProviderCredential,
-  writeProviderCredential,
-} from "../src/provider-credentials.mjs";
+import { readProviderCredential, writeProviderCredential } from "../src/provider-credentials.mjs";
 
 const MANIFEST_FINGERPRINT = "a".repeat(43);
 
@@ -69,7 +66,10 @@ test("Windows credential storage delegates protection and unprotection without e
       }),
       "provider-secret-value",
     );
-    assert.deepEqual(seen, [["protect", "provider-secret-value"], ["unprotect", "ciphertext"]]);
+    assert.deepEqual(seen, [
+      ["protect", "provider-secret-value"],
+      ["unprotect", "ciphertext"],
+    ]);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

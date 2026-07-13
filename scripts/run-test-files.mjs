@@ -18,10 +18,7 @@ const TEST_FILES = [
 
 const DEFAULT_TIMEOUT_MS = 120000;
 const parsedTimeoutMs = Number.parseInt(process.env.OPENCODE_ADVISOR_TEST_FILE_TIMEOUT_MS ?? "", 10);
-const timeoutMs =
-  Number.isFinite(parsedTimeoutMs) && parsedTimeoutMs > 0
-    ? parsedTimeoutMs
-    : DEFAULT_TIMEOUT_MS;
+const timeoutMs = Number.isFinite(parsedTimeoutMs) && parsedTimeoutMs > 0 ? parsedTimeoutMs : DEFAULT_TIMEOUT_MS;
 
 async function runTestFile(testFile) {
   console.log(`\n=== ${testFile} ===`);

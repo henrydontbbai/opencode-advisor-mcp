@@ -288,10 +288,7 @@ test("parseAllowedRoots splits semicolon-separated Windows paths", () => {
 test("parseAllowedRoots preserves quoted Windows roots containing semicolons", () => {
   const roots = parseAllowedRoots('"C:\\workspace\\team;alpha"; C:\\workspace\\allowed-roots', {}, path.win32);
 
-  assert.deepEqual(roots, [
-    "C:\\workspace\\team;alpha",
-    "C:\\workspace\\allowed-roots",
-  ]);
+  assert.deepEqual(roots, ["C:\\workspace\\team;alpha", "C:\\workspace\\allowed-roots"]);
 });
 
 test("parseAllowedRoots defaults to no allowed roots when env is unset", () => {
@@ -299,22 +296,20 @@ test("parseAllowedRoots defaults to no allowed roots when env is unset", () => {
 });
 
 test("createServer rejects startup when allowed roots are not configured", () => {
-  assert.throws(
-    () => createServer({ env: {}, platform: "win32" }),
-    /OPENCODE_ADVISOR_ALLOWED_ROOTS/i,
-  );
+  assert.throws(() => createServer({ env: {}, platform: "win32" }), /OPENCODE_ADVISOR_ALLOWED_ROOTS/i);
 });
 
 test("createServer rejects an unsafe custom OpenCode command before serving tools", () => {
   assert.throws(
-    () => createServer({
-      env: {
-        OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
-        OPENCODE_ADVISOR_OPENCODE_CMD: "opencode --unsafe",
-      },
-      platform: "win32",
-      existsSync: () => true,
-    }),
+    () =>
+      createServer({
+        env: {
+          OPENCODE_ADVISOR_ALLOWED_ROOTS: WINDOWS_ALLOWED_ROOT,
+          OPENCODE_ADVISOR_OPENCODE_CMD: "opencode --unsafe",
+        },
+        platform: "win32",
+        existsSync: () => true,
+      }),
     /absolute executable/i,
   );
 });
@@ -376,7 +371,10 @@ test("askOpenCodeAdvisor accepts a real cwd inside an allowed root", async () =>
 
   assert.equal(result.ok, true);
   const expectedCommand = process.platform === "win32" ? WINDOWS_MOCK_OPENCODE_COMMAND : "opencode";
-  assert.equal(calls.some((call) => call.command === expectedCommand), true);
+  assert.equal(
+    calls.some((call) => call.command === expectedCommand),
+    true,
+  );
 });
 
 test("askOpenCodeAdvisor rejects cwd values containing NUL bytes", async () => {
@@ -1032,7 +1030,12 @@ test("askOpenCodeAdvisor returns advisor text on mocked success path", async () 
     git: {
       "status --short": { code: 0, stdout: " M src/server.mjs\n", stderr: "", timedOut: false },
       [`diff --stat main -- ${reviewPath}`]: { code: 0, stdout: " src/server.mjs | 1 +", stderr: "", timedOut: false },
-      [`diff main -- ${reviewPath}`]: { code: 0, stdout: "diff --git a/src/server.mjs b/src/server.mjs", stderr: "", timedOut: false },
+      [`diff main -- ${reviewPath}`]: {
+        code: 0,
+        stdout: "diff --git a/src/server.mjs b/src/server.mjs",
+        stderr: "",
+        timedOut: false,
+      },
       [`diff --cached --stat -- ${reviewPath}`]: { code: 0, stdout: "", stderr: "", timedOut: false },
       [`diff --cached -- ${reviewPath}`]: { code: 0, stdout: "", stderr: "", timedOut: false },
     },
@@ -1201,8 +1204,14 @@ test("askOpenCodeAdvisor uses a trusted PATH executable before a Windows fallbac
   );
 
   assert.equal(result.ok, true);
-  assert.deepEqual(calls.map((call) => call.command), [pathCommand, fallback]);
-  assert.equal(calls.some((call) => call.command === "opencode"), false);
+  assert.deepEqual(
+    calls.map((call) => call.command),
+    [pathCommand, fallback],
+  );
+  assert.equal(
+    calls.some((call) => call.command === "opencode"),
+    false,
+  );
   for (const call of calls) {
     assert.equal(call.args.includes("--pure"), true);
     assert.deepEqual(call.args.slice(call.args.indexOf("--model"), call.args.indexOf("--model") + 2), [
@@ -1264,20 +1273,24 @@ test("askOpenCodeAdvisor gives direct sessions managed titles and records durabl
   const titleIndex = opencodeCall.args.indexOf("--title");
   assert.notEqual(titleIndex, -1);
   assert.match(opencodeCall.args[titleIndex + 1], /^opencode-advisor:direct-reviewer_[a-f0-9]{32}$/);
-  assert.deepEqual(sessionMetadata, [{
-    cwd: WINDOWS_CHILD_REPO,
-    title: opencodeCall.args[titleIndex + 1],
-    observedAt: sessionMetadata[0].observedAt,
-  }]);
+  assert.deepEqual(sessionMetadata, [
+    {
+      cwd: WINDOWS_CHILD_REPO,
+      title: opencodeCall.args[titleIndex + 1],
+      observedAt: sessionMetadata[0].observedAt,
+    },
+  ]);
   assert.equal(Number.isFinite(Date.parse(sessionMetadata[0].observedAt)), true);
   assert.equal(configuredRegistryQueueDir, path.win32.resolve(queueDir));
-  assert.deepEqual(await listManagedSessionRecords(queueDir), [{
-    version: 1,
-    session_id: "ses_internal",
-    cwd: WINDOWS_CHILD_REPO,
-    title: opencodeCall.args[titleIndex + 1],
-    observed_at: sessionMetadata[0].observedAt,
-  }]);
+  assert.deepEqual(await listManagedSessionRecords(queueDir), [
+    {
+      version: 1,
+      session_id: "ses_internal",
+      cwd: WINDOWS_CHILD_REPO,
+      title: opencodeCall.args[titleIndex + 1],
+      observed_at: sessionMetadata[0].observedAt,
+    },
+  ]);
   assertIsolatedAdvisorTaskEnv(opencodeCall.options.env);
   assert.equal("session_id" in result, false);
 });
@@ -1322,14 +1335,17 @@ test("askOpenCodeAdvisor records a started session before returning timeout", as
   assert.deepEqual(sessionIds, ["ses_timeoutcleanup"]);
   const opencodeCall = calls.find((call) => call.command === WINDOWS_MOCK_OPENCODE_COMMAND);
   assert.equal(opencodeCall.args.includes("--pure"), true);
-  assert.deepEqual(opencodeCall.args.slice(opencodeCall.args.indexOf("--model"), opencodeCall.args.indexOf("--model") + 2), [
-    "--model",
-    "test-provider/test-model",
-  ]);
+  assert.deepEqual(
+    opencodeCall.args.slice(opencodeCall.args.indexOf("--model"), opencodeCall.args.indexOf("--model") + 2),
+    ["--model", "test-provider/test-model"],
+  );
   assert.equal(opencodeCall.args.includes("--title"), true);
   assert.equal(opencodeCall.args.at(-1), "opencode-advisor:ocq_timeoutcleanup");
   assertIsolatedAdvisorTaskEnv(opencodeCall.options.env);
-  assert.deepEqual((await listManagedSessionRecords(queueDir)).map((record) => record.session_id), ["ses_timeoutcleanup"]);
+  assert.deepEqual(
+    (await listManagedSessionRecords(queueDir)).map((record) => record.session_id),
+    ["ses_timeoutcleanup"],
+  );
   assert.equal("session_id" in result, false);
 });
 
@@ -1407,8 +1423,14 @@ test("askOpenCodePlanner defaults to status-only context and returns planner tex
   assert.equal(result.status, "M docs/plan.md");
   assert.equal(result.diff_truncated, false);
   const plannerCall = calls.find((call) => call.command === WINDOWS_MOCK_OPENCODE_COMMAND);
-  assert.match(plannerCall.args[plannerCall.args.indexOf("--title") + 1], /^opencode-advisor:direct-planner_[a-f0-9]{32}$/);
-  assert.deepEqual((await listManagedSessionRecords(queueDir)).map((record) => record.session_id), ["ses_directplanner"]);
+  assert.match(
+    plannerCall.args[plannerCall.args.indexOf("--title") + 1],
+    /^opencode-advisor:direct-planner_[a-f0-9]{32}$/,
+  );
+  assert.deepEqual(
+    (await listManagedSessionRecords(queueDir)).map((record) => record.session_id),
+    ["ses_directplanner"],
+  );
   assert.deepEqual(
     calls.filter((call) => call.command === "git").map((call) => call.args),
     [["status", "--short"]],
@@ -1531,7 +1553,10 @@ test("askOpenCodeAdvisor caps the configured max diff chars at the input safety 
   );
 
   assert.equal(result.ok, true);
-  assert.equal(calls.find((call) => call.command === WINDOWS_MOCK_OPENCODE_COMMAND).options.input.includes(firstDiff), false);
+  assert.equal(
+    calls.find((call) => call.command === WINDOWS_MOCK_OPENCODE_COMMAND).options.input.includes(firstDiff),
+    false,
+  );
 });
 
 test("askOpenCodeAdvisor redacts common secrets before sending diff context to OpenCode", async () => {
@@ -1586,7 +1611,12 @@ test("askOpenCodeAdvisor preserves successful git context when one diff command 
       "diff --stat main --": { code: 0, stdout: " src/server.mjs | 1 +", stderr: "", timedOut: false },
       "diff main --": { code: 1, stdout: "", stderr: "fatal: synthetic diff failure", timedOut: false },
       "diff --cached --stat --": { code: 0, stdout: " src/server.mjs | 2 ++", stderr: "", timedOut: false },
-      "diff --cached --": { code: 0, stdout: "diff --git a/src/server.mjs b/src/server.mjs", stderr: "", timedOut: false },
+      "diff --cached --": {
+        code: 0,
+        stdout: "diff --git a/src/server.mjs b/src/server.mjs",
+        stderr: "",
+        timedOut: false,
+      },
     },
   });
 
@@ -1611,7 +1641,12 @@ test("askOpenCodeAdvisor preserves successful git context when one diff command 
 test("askOpenCodeAdvisor returns git_failed when git command fails", async () => {
   const { runProcess } = createMockRunProcess({
     git: {
-      "status --short": { code: 1, stdout: "", stderr: `fatal: cannot access '${WINDOWS_CHILD_REPO}'`, timedOut: false },
+      "status --short": {
+        code: 1,
+        stdout: "",
+        stderr: `fatal: cannot access '${WINDOWS_CHILD_REPO}'`,
+        timedOut: false,
+      },
       "diff --stat HEAD --": { code: 1, stdout: "", stderr: "fatal: synthetic diff failure", timedOut: false },
       "diff HEAD --": { code: 1, stdout: "", stderr: "fatal: synthetic diff failure", timedOut: false },
       "diff --cached --stat --": { code: 1, stdout: "", stderr: "fatal: synthetic diff failure", timedOut: false },
@@ -1652,7 +1687,10 @@ test("askOpenCodeAdvisor returns opencode_not_found when a typed process spawn e
   assert.equal(result.error, "opencode_not_found");
   assert.equal(result.message, "OpenCode command could not be started");
   assert.deepEqual(result.details, {});
-  assert.equal(calls.some((call) => call.command === WINDOWS_MOCK_OPENCODE_COMMAND), true);
+  assert.equal(
+    calls.some((call) => call.command === WINDOWS_MOCK_OPENCODE_COMMAND),
+    true,
+  );
 });
 
 test("askOpenCodeAdvisor returns opencode_not_found before spawning when Windows PATH has no trusted command", async () => {
@@ -1696,7 +1734,12 @@ test("askOpenCodeAdvisor returns timeout when opencode times out", async () => {
 
 test("askOpenCodeAdvisor returns opencode_failed for nonzero exit", async () => {
   const { runProcess } = createMockRunProcess({
-    opencode: { code: 2, stdout: `${WINDOWS_CHILD_REPO}\\stdout.txt`, stderr: `${WINDOWS_CHILD_REPO}\\stderr.txt`, timedOut: false },
+    opencode: {
+      code: 2,
+      stdout: `${WINDOWS_CHILD_REPO}\\stdout.txt`,
+      stderr: `${WINDOWS_CHILD_REPO}\\stderr.txt`,
+      timedOut: false,
+    },
   });
 
   const result = await askOpenCodeAdvisor(
@@ -1886,7 +1929,8 @@ test("askOpenCodeAdvisor returns queued result without serializing provider cred
       return {
         ok: false,
         error: "queued",
-        message: "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.",
+        message:
+          "OpenCode task is queued or running, not failed. Keep this phase pending and call get_opencode_task later.",
         details: {
           task_id: "ocq_test",
           role: "reviewer",
@@ -1934,10 +1978,7 @@ test("getOpenCodeTask returns completed reviewer results from the task queue", a
     }),
   };
 
-  const taskResult = await getOpenCodeTask(
-    { task_id: "ocq_completedreviewer" },
-    { taskQueue },
-  );
+  const taskResult = await getOpenCodeTask({ task_id: "ocq_completedreviewer" }, { taskQueue });
   assert.equal(taskResult.ok, true);
   assert.equal(taskResult.advisor_text, "Looks good");
 });
@@ -1954,10 +1995,7 @@ test("getOpenCodeTask returns completed planner results from the task queue", as
     }),
   };
 
-  const taskResult = await getOpenCodeTask(
-    { task_id: "ocq_completedplanner" },
-    { taskQueue },
-  );
+  const taskResult = await getOpenCodeTask({ task_id: "ocq_completedplanner" }, { taskQueue });
   assert.equal(taskResult.ok, true);
   assert.equal(taskResult.planner_text, "Tighten validation points.");
 });

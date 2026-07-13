@@ -47,6 +47,8 @@
     "setup": "node bin/opencode-advisor-setup.mjs",
     "doctor": "node bin/opencode-advisor-doctor.mjs",
     "print-agent": "node bin/opencode-advisor-agent.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "smoke": "node -e \"import('./src/server.mjs').then((m) => { const env = { OPENCODE_ADVISOR_ALLOWED_ROOTS: process.cwd() }; m.createServer({ env }); if (m.parseAllowedRoots(undefined, {}).length !== 0) process.exit(1); let failed = false; try { m.createServer({ env: {} }); failed = true; } catch {} if (failed) process.exit(1); })\"",
     "test": "node scripts/run-test-files.mjs",
     "test:doctor": "node --test test/doctor.test.mjs"
@@ -54,5 +56,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "prettier": "3.6.2"
   }
 }

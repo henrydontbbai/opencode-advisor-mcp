@@ -4,10 +4,12 @@ import path from "node:path";
 export const DEFAULT_MAX_DIFF_CHARS = 60000;
 export const DEFAULT_TIMEOUT_MS = 300000;
 
-const AGENT_FALLBACK_PATTERN = /agent "(codex-advisor|codex-planning-partner)" not found|Falling back to default agent/i;
+const AGENT_FALLBACK_PATTERN =
+  /agent "(codex-advisor|codex-planning-partner)" not found|Falling back to default agent/i;
 const UPSTREAM_UNAVAILABLE_PATTERN = /upstream service temporarily unavailable|service temporarily unavailable/i;
 const DIAGNOSTIC_FIELDS = ["message", "error", "stderr", "stdout", "detail", "details", "reason"];
-const SENSITIVE_ENVIRONMENT_NAME = /^(?:OPENCODE_|XDG_|NODE_|BUN_|DENO_|LD_|DYLD_)|(?:^|_)(?:API_?KEY|ACCESS_?KEY|KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|BASE_?URL|ENDPOINT)(?:_|$)/i;
+const SENSITIVE_ENVIRONMENT_NAME =
+  /^(?:OPENCODE_|XDG_|NODE_|BUN_|DENO_|LD_|DYLD_)|(?:^|_)(?:API_?KEY|ACCESS_?KEY|KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|BASE_?URL|ENDPOINT)(?:_|$)/i;
 const PROCESS_LAUNCH_ERROR = Symbol("opencode-advisor.process-launch-error");
 
 export const SUCCESS_RESPONSE_KEYS = Object.freeze([
@@ -28,13 +30,7 @@ export const PLANNER_SUCCESS_RESPONSE_KEYS = Object.freeze([
   "opencode_exit_code",
 ]);
 
-export function createSuccessResponse({
-  baseRef,
-  status,
-  diffTruncated,
-  advisorText,
-  opencodeExitCode,
-}) {
+export function createSuccessResponse({ baseRef, status, diffTruncated, advisorText, opencodeExitCode }) {
   return {
     ok: true,
     base_ref: baseRef,
@@ -45,13 +41,7 @@ export function createSuccessResponse({
   };
 }
 
-export function createPlannerSuccessResponse({
-  baseRef,
-  status,
-  diffTruncated,
-  plannerText,
-  opencodeExitCode,
-}) {
+export function createPlannerSuccessResponse({ baseRef, status, diffTruncated, plannerText, opencodeExitCode }) {
   return {
     ok: true,
     base_ref: baseRef,
@@ -68,8 +58,8 @@ export function pathForPlatform(platform = process.platform) {
 
 export function positiveNumber(value, fallback) {
   if (
-    (typeof value !== "number" && typeof value !== "string")
-    || (typeof value === "string" && !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value))
+    (typeof value !== "number" && typeof value !== "string") ||
+    (typeof value === "string" && !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value))
   ) {
     return fallback;
   }
@@ -85,36 +75,15 @@ function configuredWindowsOpencodePaths(env, platform) {
   const pathApi = pathForPlatform(platform);
   const candidates = [];
   if (typeof env.APPDATA === "string" && pathApi.isAbsolute(env.APPDATA)) {
-    candidates.push(pathApi.join(
-      env.APPDATA,
-      "npm",
-      "node_modules",
-      "opencode-ai",
-      "bin",
-      "opencode.exe",
-    ));
+    candidates.push(pathApi.join(env.APPDATA, "npm", "node_modules", "opencode-ai", "bin", "opencode.exe"));
   }
   if (typeof env.LOCALAPPDATA === "string" && pathApi.isAbsolute(env.LOCALAPPDATA)) {
-    candidates.push(pathApi.join(
-      env.LOCALAPPDATA,
-      "pnpm",
-      "global",
-      "5",
-      "node_modules",
-      "opencode-ai",
-      "bin",
-      "opencode.exe",
-    ));
+    candidates.push(
+      pathApi.join(env.LOCALAPPDATA, "pnpm", "global", "5", "node_modules", "opencode-ai", "bin", "opencode.exe"),
+    );
   }
   if (typeof env.ProgramFiles === "string" && pathApi.isAbsolute(env.ProgramFiles)) {
-    candidates.push(pathApi.join(
-      env.ProgramFiles,
-      "nodejs",
-      "node_modules",
-      "opencode-ai",
-      "bin",
-      "opencode.exe",
-    ));
+    candidates.push(pathApi.join(env.ProgramFiles, "nodejs", "node_modules", "opencode-ai", "bin", "opencode.exe"));
   }
   return candidates;
 }
@@ -165,13 +134,17 @@ function getWindowsPathOpencodeCommand(env, platform, exists, isFile) {
   return null;
 }
 
-export function getOpencodeFallbackCommands(
-  { env = process.env, platform = process.platform, exists = existsSync, isFile = defaultIsFile } = {},
-) {
+export function getOpencodeFallbackCommands({
+  env = process.env,
+  platform = process.platform,
+  exists = existsSync,
+  isFile = defaultIsFile,
+} = {}) {
   if (platform !== "win32") return [];
   const pathApi = pathForPlatform(platform);
-  return configuredWindowsOpencodePaths(env, platform)
-    .filter((candidate) => pathApi.isAbsolute(candidate) && isExistingFile(candidate, exists, isFile));
+  return configuredWindowsOpencodePaths(env, platform).filter(
+    (candidate) => pathApi.isAbsolute(candidate) && isExistingFile(candidate, exists, isFile),
+  );
 }
 
 export function resolveOpencodeCommand(
@@ -181,13 +154,7 @@ export function resolveOpencodeCommand(
   if (base === "opencode") return "opencode";
 
   const pathApi = pathForPlatform(platform);
-  if (
-    typeof base !== "string"
-    || !base
-    || base.includes("\0")
-    || /[\r\n]/.test(base)
-    || !pathApi.isAbsolute(base)
-  ) {
+  if (typeof base !== "string" || !base || base.includes("\0") || /[\r\n]/.test(base) || !pathApi.isAbsolute(base)) {
     throw new Error("OPENCODE_ADVISOR_OPENCODE_CMD must be an absolute executable path.");
   }
   if (platform === "win32" && !/\.exe$/i.test(base)) {
@@ -209,10 +176,7 @@ export function resolveOpencodeCommands(
   if (platform !== "win32") return ["opencode"];
 
   const pathCommand = getWindowsPathOpencodeCommand(env, platform, exists, isFile);
-  return [...new Set([
-    pathCommand,
-    ...getOpencodeFallbackCommands({ env, platform, exists, isFile }),
-  ].filter(Boolean))];
+  return [...new Set([pathCommand, ...getOpencodeFallbackCommands({ env, platform, exists, isFile })].filter(Boolean))];
 }
 
 export function markProcessLaunchError(error) {
@@ -226,8 +190,7 @@ export function markProcessLaunchError(error) {
 export function isProcessLaunchError(error) {
   try {
     return Boolean(
-      error?.[PROCESS_LAUNCH_ERROR]
-      || (typeof error?.syscall === "string" && /^spawn(?:\s|$)/i.test(error.syscall)),
+      error?.[PROCESS_LAUNCH_ERROR] || (typeof error?.syscall === "string" && /^spawn(?:\s|$)/i.test(error.syscall)),
     );
   } catch {
     return false;
@@ -252,11 +215,12 @@ export function outputHasStructuredAssistantText(stdout = "") {
     if (!trimmed) continue;
     try {
       const event = JSON.parse(trimmed);
-      const text = typeof event?.part?.text === "string"
-        ? event.part.text
-        : event?.type === "text" && typeof event?.text === "string"
-          ? event.text
-          : "";
+      const text =
+        typeof event?.part?.text === "string"
+          ? event.part.text
+          : event?.type === "text" && typeof event?.text === "string"
+            ? event.text
+            : "";
       if (text.trim()) return true;
     } catch {}
   }
@@ -274,7 +238,10 @@ export function valueHasPattern(value, pattern, seen = new WeakSet()) {
 }
 
 function diagnosticValueHasPattern(event, pattern) {
-  return valueHasPattern(DIAGNOSTIC_FIELDS.map((field) => event?.[field]), pattern);
+  return valueHasPattern(
+    DIAGNOSTIC_FIELDS.map((field) => event?.[field]),
+    pattern,
+  );
 }
 
 function outputHasDiagnosticPattern(stdout = "", stderr = "", pattern) {

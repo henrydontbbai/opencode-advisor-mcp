@@ -6,16 +6,9 @@ import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  runOpenCodeAdvisorNow,
-  runOpenCodePlannerNow,
-} from "../src/opencode-core.mjs";
+import { runOpenCodeAdvisorNow, runOpenCodePlannerNow } from "../src/opencode-core.mjs";
 import { writeProviderCredential } from "../src/provider-credentials.mjs";
-import {
-  getAdvisorProfilePaths,
-  getAdvisorConfigFingerprint,
-  writeAdvisorProfile,
-} from "../src/provider-profile.mjs";
+import { getAdvisorProfilePaths, getAdvisorConfigFingerprint, writeAdvisorProfile } from "../src/provider-profile.mjs";
 
 const RUN_PROVIDER_CONTRACT = process.env.OPENCODE_ADVISOR_RUN_PROVIDER_CONTRACT === "1";
 const OPT_IN_SKIP_REASON = "Set OPENCODE_ADVISOR_RUN_PROVIDER_CONTRACT=1 to run the local OpenCode provider contract.";
@@ -24,14 +17,7 @@ const MAX_REQUEST_BYTES = 1024 * 1024;
 
 function installedOpenCodeCommand() {
   if (process.platform === "win32" && process.env.APPDATA) {
-    const candidate = path.join(
-      process.env.APPDATA,
-      "npm",
-      "node_modules",
-      "opencode-ai",
-      "bin",
-      "opencode.exe",
-    );
+    const candidate = path.join(process.env.APPDATA, "npm", "node_modules", "opencode-ai", "bin", "opencode.exe");
     if (existsSync(candidate)) return candidate;
   }
   return "opencode";
@@ -63,15 +49,18 @@ function writeSseData(response, value) {
 }
 
 function responseObject(id, text, status = "completed", error = null) {
-  const output = status === "completed"
-    ? [{
-      id: "msg_contract",
-      type: "message",
-      status: "completed",
-      role: "assistant",
-      content: [{ type: "output_text", text, annotations: [] }],
-    }]
-    : [];
+  const output =
+    status === "completed"
+      ? [
+          {
+            id: "msg_contract",
+            type: "message",
+            status: "completed",
+            role: "assistant",
+            content: [{ type: "output_text", text, annotations: [] }],
+          },
+        ]
+      : [];
   return {
     id,
     object: "response",
@@ -203,28 +192,40 @@ function sendResponsesToolCall(response, recordEvent) {
   completedResponse.output = [completedCall];
   for (const [event, value] of [
     ["response.created", { type: "response.created", response: responseObject(id, "", "in_progress") }],
-    ["response.output_item.added", {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: functionCall,
-    }],
-    ["response.function_call_arguments.delta", {
-      type: "response.function_call_arguments.delta",
-      item_id: functionCall.id,
-      output_index: 0,
-      delta: "{}",
-    }],
-    ["response.function_call_arguments.done", {
-      type: "response.function_call_arguments.done",
-      item_id: functionCall.id,
-      output_index: 0,
-      arguments: "{}",
-    }],
-    ["response.output_item.done", {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: completedCall,
-    }],
+    [
+      "response.output_item.added",
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: functionCall,
+      },
+    ],
+    [
+      "response.function_call_arguments.delta",
+      {
+        type: "response.function_call_arguments.delta",
+        item_id: functionCall.id,
+        output_index: 0,
+        delta: "{}",
+      },
+    ],
+    [
+      "response.function_call_arguments.done",
+      {
+        type: "response.function_call_arguments.done",
+        item_id: functionCall.id,
+        output_index: 0,
+        arguments: "{}",
+      },
+    ],
+    [
+      "response.output_item.done",
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: completedCall,
+      },
+    ],
     ["response.completed", { type: "response.completed", response: completedResponse }],
   ]) {
     recordEvent({ event, type: value.type });
@@ -244,24 +245,28 @@ function sendChatCompletionsSuccess(response, text) {
     object: "chat.completion.chunk",
     created: 0,
     model: "contract-model",
-    choices: [{
-      index: 0,
-      delta: { role: "assistant", content: text },
-      logprobs: null,
-      finish_reason: null,
-    }],
+    choices: [
+      {
+        index: 0,
+        delta: { role: "assistant", content: text },
+        logprobs: null,
+        finish_reason: null,
+      },
+    ],
   });
   writeSseData(response, {
     id: "chatcmpl_contract",
     object: "chat.completion.chunk",
     created: 0,
     model: "contract-model",
-    choices: [{
-      index: 0,
-      delta: {},
-      logprobs: null,
-      finish_reason: "stop",
-    }],
+    choices: [
+      {
+        index: 0,
+        delta: {},
+        logprobs: null,
+        finish_reason: "stop",
+      },
+    ],
   });
   response.end("data: [DONE]\n\n");
 }
@@ -298,8 +303,7 @@ async function startProviderFixture({ transport, outcome }) {
         maxOutputTokens: body?.max_output_tokens ?? null,
         inputIsArray: Array.isArray(body?.input),
         includesEncryptedReasoning:
-          Array.isArray(body?.include)
-          && body.include.includes("reasoning.encrypted_content"),
+          Array.isArray(body?.include) && body.include.includes("reasoning.encrypted_content"),
         store: body?.store,
         hasExpectedAuthorization: request.headers.authorization === `Bearer ${PROVIDER_CREDENTIAL}`,
       });
@@ -371,7 +375,10 @@ async function createIndependentProfile({ baseUrl, transport, reviewerVariant, p
   };
   const agentTemplates = {
     "codex-advisor.md": await fs.readFile(new URL("../agents/codex-advisor.md", import.meta.url), "utf8"),
-    "codex-planning-partner.md": await fs.readFile(new URL("../agents/codex-planning-partner.md", import.meta.url), "utf8"),
+    "codex-planning-partner.md": await fs.readFile(
+      new URL("../agents/codex-planning-partner.md", import.meta.url),
+      "utf8",
+    ),
   };
 
   await writeAdvisorProfile({ config, paths, agentTemplates });
@@ -421,12 +428,16 @@ async function withProviderContract(options, callback) {
 }
 
 function assertFixtureRequest(fixture, expectedPath) {
-  assert.equal(fixture.observations.some((request) => (
-    request.pathname === expectedPath
-      && request.stream === true
-      && request.model === "contract-model"
-      && request.hasExpectedAuthorization
-  )), true);
+  assert.equal(
+    fixture.observations.some(
+      (request) =>
+        request.pathname === expectedPath &&
+        request.stream === true &&
+        request.model === "contract-model" &&
+        request.hasExpectedAuthorization,
+    ),
+    true,
+  );
 }
 
 async function requireInstalledOpenCode(t) {
@@ -435,183 +446,259 @@ async function requireInstalledOpenCode(t) {
   return false;
 }
 
-test("local Responses provider streams usable reviewer JSON output through an isolated profile", {
-  skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
-  timeout: 90000,
-}, async (t) => {
-  if (!(await requireInstalledOpenCode(t))) return;
-  await withProviderContract({ transport: "responses", outcome: "success" }, async ({ fixture, config, cwd, env }) => {
-    const result = await runOpenCodeAdvisorNow({
-      cwd,
-      include_status: false,
-      include_diff: false,
-      question: "Return the fixture completion text.",
-    }, { env });
+test(
+  "local Responses provider streams usable reviewer JSON output through an isolated profile",
+  {
+    skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
+    timeout: 90000,
+  },
+  async (t) => {
+    if (!(await requireInstalledOpenCode(t))) return;
+    await withProviderContract(
+      { transport: "responses", outcome: "success" },
+      async ({ fixture, config, cwd, env }) => {
+        const result = await runOpenCodeAdvisorNow(
+          {
+            cwd,
+            include_status: false,
+            include_diff: false,
+            question: "Return the fixture completion text.",
+          },
+          { env },
+        );
 
-    assert.equal(result.ok, true);
-    assert.equal(result.advisor_text.includes(fixture.successText), true);
-    assertFixtureRequest(fixture, "/v1/responses");
-    const request = fixture.observations.at(-1);
-    assert.equal(Number.isInteger(request.maxOutputTokens), true);
-    assert.equal(request.maxOutputTokens > 0, true);
-    assert.equal(request.inputIsArray, true);
-    assert.equal(request.includesEncryptedReasoning, false);
-    assert.equal(request.store, false);
-    assert.equal(result.advisor_text.includes(PROVIDER_CREDENTIAL), false);
-    assert.equal(config.provider.transport, "responses");
-  });
-});
-
-test("local Responses provider forwards the reviewer reasoning variant", {
-  skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
-  timeout: 90000,
-}, async (t) => {
-  if (!(await requireInstalledOpenCode(t))) return;
-  await withProviderContract({
-    transport: "responses",
-    outcome: "success",
-    reviewerVariant: "high",
-  }, async ({ fixture, cwd, env }) => {
-    const result = await runOpenCodeAdvisorNow({
-      cwd,
-      include_status: false,
-      include_diff: false,
-      question: "Return the fixture completion text.",
-    }, { env });
-
-    assert.equal(result.ok, true);
-    assertFixtureRequest(fixture, "/v1/responses");
-    assert.equal(fixture.observations.at(-1).reasoningEffort, "high");
-    assert.equal(fixture.observations.at(-1).includesEncryptedReasoning, true);
-  });
-});
-
-test("local Responses provider forwards the planner reasoning variant", {
-  skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
-  timeout: 90000,
-}, async (t) => {
-  if (!(await requireInstalledOpenCode(t))) return;
-  await withProviderContract({
-    transport: "responses",
-    outcome: "success",
-    plannerVariant: "max",
-  }, async ({ fixture, cwd, env }) => {
-    const result = await runOpenCodePlannerNow({
-      cwd,
-      include_status: false,
-      include_diff: false,
-      current_plan: "Return the fixture completion text.",
-    }, { env });
-
-    assert.equal(result.ok, true);
-    assertFixtureRequest(fixture, "/v1/responses");
-    assert.equal(fixture.observations.at(-1).reasoningEffort, "max");
-  });
-});
-
-test("local Responses provider preserves reviewer and planner variants in one shared-model profile", {
-  skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
-  timeout: 90000,
-}, async (t) => {
-  if (!(await requireInstalledOpenCode(t))) return;
-  await withProviderContract({
-    transport: "responses",
-    outcome: "success",
-    reviewerVariant: "high",
-    plannerVariant: "max",
-  }, async ({ fixture, cwd, env }) => {
-    const reviewerResult = await runOpenCodeAdvisorNow({
-      cwd,
-      include_status: false,
-      include_diff: false,
-      question: "Return the fixture completion text.",
-    }, { env });
-    const plannerResult = await runOpenCodePlannerNow({
-      cwd,
-      include_status: false,
-      include_diff: false,
-      current_plan: "Return the fixture completion text.",
-    }, { env });
-
-    assert.equal(reviewerResult.ok, true);
-    assert.equal(plannerResult.ok, true, JSON.stringify(plannerResult));
-    assertFixtureRequest(fixture, "/v1/responses");
-    const reasoningEfforts = fixture.observations
-      .filter((request) => request.pathname === "/v1/responses")
-      .map((request) => request.reasoningEffort);
-    assert.equal(reasoningEfforts.includes("high"), true);
-    assert.equal(reasoningEfforts.at(-1), "max");
-  });
-});
-
-test("local Chat Completions provider streams usable planner JSON output through an isolated profile", {
-  skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
-  timeout: 90000,
-}, async (t) => {
-  if (!(await requireInstalledOpenCode(t))) return;
-  await withProviderContract({ transport: "chat_completions", outcome: "success" }, async ({ fixture, config, cwd, env }) => {
-    const result = await runOpenCodePlannerNow({
-      cwd,
-      include_status: false,
-      include_diff: false,
-      current_plan: "Return the fixture completion text.",
-    }, { env });
-
-    assert.equal(result.ok, true);
-    assert.equal(result.planner_text.includes(fixture.successText), true);
-    assertFixtureRequest(fixture, "/v1/chat/completions");
-    assert.equal(result.planner_text.includes(PROVIDER_CREDENTIAL), false);
-    assert.equal(config.provider.transport, "chat_completions");
-  });
-});
-
-test("local Responses error SSE fails closed without returning the provider credential", {
-  skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
-  timeout: 90000,
-}, async (t) => {
-  if (!(await requireInstalledOpenCode(t))) return;
-  await withProviderContract({ transport: "responses", outcome: "error" }, async ({ fixture, cwd, env }) => {
-    const result = await runOpenCodeAdvisorNow({
-      cwd,
-      include_status: false,
-      include_diff: false,
-      question: "Return the fixture completion text.",
-    }, { env });
-
-    assert.equal(fixture.sentErrorSse(), true);
-    assertFixtureRequest(fixture, "/v1/responses");
-    assert.equal(fixture.responseEvents.some((event) => event.event === "error" && event.type === "error"), true);
-    assert.equal(fixture.responseEvents.some((event) => event.event === "response.failed" && event.type === "response.failed"), true);
-    assert.equal(result.ok, false);
-    assert.equal(result.error, "opencode_failed");
-    assert.equal(JSON.stringify(result).includes(PROVIDER_CREDENTIAL), false);
-  });
-});
-
-test("local Responses tool-call SSE fails closed when the built-in agent denies tools", {
-  skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
-  timeout: 90000,
-}, async (t) => {
-  if (!(await requireInstalledOpenCode(t))) return;
-  await withProviderContract({ transport: "responses", outcome: "tool", timeoutMs: "8000" }, async ({ fixture, cwd, env }) => {
-    const result = await runOpenCodeAdvisorNow({
-      cwd,
-      include_status: false,
-      include_diff: false,
-      question: "Try the fixture tool call.",
-    }, { env });
-
-    assertFixtureRequest(fixture, "/v1/responses");
-    assert.equal(
-      fixture.responseEvents.some((event) => event.event === "response.function_call_arguments.delta"),
-      true,
+        assert.equal(result.ok, true);
+        assert.equal(result.advisor_text.includes(fixture.successText), true);
+        assertFixtureRequest(fixture, "/v1/responses");
+        const request = fixture.observations.at(-1);
+        assert.equal(Number.isInteger(request.maxOutputTokens), true);
+        assert.equal(request.maxOutputTokens > 0, true);
+        assert.equal(request.inputIsArray, true);
+        assert.equal(request.includesEncryptedReasoning, false);
+        assert.equal(request.store, false);
+        assert.equal(result.advisor_text.includes(PROVIDER_CREDENTIAL), false);
+        assert.equal(config.provider.transport, "responses");
+      },
     );
-    assert.equal(
-      fixture.responseEvents.some((event) => event.event === "response.output_item.done"),
-      true,
+  },
+);
+
+test(
+  "local Responses provider forwards the reviewer reasoning variant",
+  {
+    skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
+    timeout: 90000,
+  },
+  async (t) => {
+    if (!(await requireInstalledOpenCode(t))) return;
+    await withProviderContract(
+      {
+        transport: "responses",
+        outcome: "success",
+        reviewerVariant: "high",
+      },
+      async ({ fixture, cwd, env }) => {
+        const result = await runOpenCodeAdvisorNow(
+          {
+            cwd,
+            include_status: false,
+            include_diff: false,
+            question: "Return the fixture completion text.",
+          },
+          { env },
+        );
+
+        assert.equal(result.ok, true);
+        assertFixtureRequest(fixture, "/v1/responses");
+        assert.equal(fixture.observations.at(-1).reasoningEffort, "high");
+        assert.equal(fixture.observations.at(-1).includesEncryptedReasoning, true);
+      },
     );
-    assert.equal(result.ok, false);
-    assert.equal(result.error, "timeout");
-    assert.equal(JSON.stringify(result).includes(PROVIDER_CREDENTIAL), false);
-  });
-});
+  },
+);
+
+test(
+  "local Responses provider forwards the planner reasoning variant",
+  {
+    skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
+    timeout: 90000,
+  },
+  async (t) => {
+    if (!(await requireInstalledOpenCode(t))) return;
+    await withProviderContract(
+      {
+        transport: "responses",
+        outcome: "success",
+        plannerVariant: "max",
+      },
+      async ({ fixture, cwd, env }) => {
+        const result = await runOpenCodePlannerNow(
+          {
+            cwd,
+            include_status: false,
+            include_diff: false,
+            current_plan: "Return the fixture completion text.",
+          },
+          { env },
+        );
+
+        assert.equal(result.ok, true);
+        assertFixtureRequest(fixture, "/v1/responses");
+        assert.equal(fixture.observations.at(-1).reasoningEffort, "max");
+      },
+    );
+  },
+);
+
+test(
+  "local Responses provider preserves reviewer and planner variants in one shared-model profile",
+  {
+    skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
+    timeout: 90000,
+  },
+  async (t) => {
+    if (!(await requireInstalledOpenCode(t))) return;
+    await withProviderContract(
+      {
+        transport: "responses",
+        outcome: "success",
+        reviewerVariant: "high",
+        plannerVariant: "max",
+      },
+      async ({ fixture, cwd, env }) => {
+        const reviewerResult = await runOpenCodeAdvisorNow(
+          {
+            cwd,
+            include_status: false,
+            include_diff: false,
+            question: "Return the fixture completion text.",
+          },
+          { env },
+        );
+        const plannerResult = await runOpenCodePlannerNow(
+          {
+            cwd,
+            include_status: false,
+            include_diff: false,
+            current_plan: "Return the fixture completion text.",
+          },
+          { env },
+        );
+
+        assert.equal(reviewerResult.ok, true);
+        assert.equal(plannerResult.ok, true, JSON.stringify(plannerResult));
+        assertFixtureRequest(fixture, "/v1/responses");
+        const reasoningEfforts = fixture.observations
+          .filter((request) => request.pathname === "/v1/responses")
+          .map((request) => request.reasoningEffort);
+        assert.equal(reasoningEfforts.includes("high"), true);
+        assert.equal(reasoningEfforts.at(-1), "max");
+      },
+    );
+  },
+);
+
+test(
+  "local Chat Completions provider streams usable planner JSON output through an isolated profile",
+  {
+    skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
+    timeout: 90000,
+  },
+  async (t) => {
+    if (!(await requireInstalledOpenCode(t))) return;
+    await withProviderContract(
+      { transport: "chat_completions", outcome: "success" },
+      async ({ fixture, config, cwd, env }) => {
+        const result = await runOpenCodePlannerNow(
+          {
+            cwd,
+            include_status: false,
+            include_diff: false,
+            current_plan: "Return the fixture completion text.",
+          },
+          { env },
+        );
+
+        assert.equal(result.ok, true);
+        assert.equal(result.planner_text.includes(fixture.successText), true);
+        assertFixtureRequest(fixture, "/v1/chat/completions");
+        assert.equal(result.planner_text.includes(PROVIDER_CREDENTIAL), false);
+        assert.equal(config.provider.transport, "chat_completions");
+      },
+    );
+  },
+);
+
+test(
+  "local Responses error SSE fails closed without returning the provider credential",
+  {
+    skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
+    timeout: 90000,
+  },
+  async (t) => {
+    if (!(await requireInstalledOpenCode(t))) return;
+    await withProviderContract({ transport: "responses", outcome: "error" }, async ({ fixture, cwd, env }) => {
+      const result = await runOpenCodeAdvisorNow(
+        {
+          cwd,
+          include_status: false,
+          include_diff: false,
+          question: "Return the fixture completion text.",
+        },
+        { env },
+      );
+
+      assert.equal(fixture.sentErrorSse(), true);
+      assertFixtureRequest(fixture, "/v1/responses");
+      assert.equal(
+        fixture.responseEvents.some((event) => event.event === "error" && event.type === "error"),
+        true,
+      );
+      assert.equal(
+        fixture.responseEvents.some((event) => event.event === "response.failed" && event.type === "response.failed"),
+        true,
+      );
+      assert.equal(result.ok, false);
+      assert.equal(result.error, "opencode_failed");
+      assert.equal(JSON.stringify(result).includes(PROVIDER_CREDENTIAL), false);
+    });
+  },
+);
+
+test(
+  "local Responses tool-call SSE fails closed when the built-in agent denies tools",
+  {
+    skip: RUN_PROVIDER_CONTRACT ? false : OPT_IN_SKIP_REASON,
+    timeout: 90000,
+  },
+  async (t) => {
+    if (!(await requireInstalledOpenCode(t))) return;
+    await withProviderContract(
+      { transport: "responses", outcome: "tool", timeoutMs: "8000" },
+      async ({ fixture, cwd, env }) => {
+        const result = await runOpenCodeAdvisorNow(
+          {
+            cwd,
+            include_status: false,
+            include_diff: false,
+            question: "Try the fixture tool call.",
+          },
+          { env },
+        );
+
+        assertFixtureRequest(fixture, "/v1/responses");
+        assert.equal(
+          fixture.responseEvents.some((event) => event.event === "response.function_call_arguments.delta"),
+          true,
+        );
+        assert.equal(
+          fixture.responseEvents.some((event) => event.event === "response.output_item.done"),
+          true,
+        );
+        assert.equal(result.ok, false);
+        assert.equal(result.error, "timeout");
+        assert.equal(JSON.stringify(result).includes(PROVIDER_CREDENTIAL), false);
+      },
+    );
+  },
+);

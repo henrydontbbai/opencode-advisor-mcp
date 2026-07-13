@@ -1,6 +1,16 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync as createTempDirOnDisk, promises as fs, readFileSync, readdirSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync as createTempDirOnDisk,
+  promises as fs,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -231,13 +241,15 @@ test("processQueueOnce saves a session id without exposing it in the public resu
   const saved = await readTaskFile(queueDir, task.id);
   assert.equal(saved.session_id, "ses_queueinternal");
   assert.equal("session_id" in saved.result, false);
-  assert.deepEqual(await listManagedSessionRecords(queueDir), [{
-    version: 1,
-    session_id: "ses_queueinternal",
-    cwd: "/repo",
-    title: "opencode-advisor:ocq_sessiontask",
-    observed_at: (await listManagedSessionRecords(queueDir))[0].observed_at,
-  }]);
+  assert.deepEqual(await listManagedSessionRecords(queueDir), [
+    {
+      version: 1,
+      session_id: "ses_queueinternal",
+      cwd: "/repo",
+      title: "opencode-advisor:ocq_sessiontask",
+      observed_at: (await listManagedSessionRecords(queueDir))[0].observed_at,
+    },
+  ]);
 });
 
 for (const failure of [
@@ -284,9 +296,10 @@ for (const failure of [
     const saved = await readTaskFile(queueDir, task.id);
     assert.equal(saved.status, failure.expectedStatus);
     assert.equal(saved.session_id, `ses_${failure.expectedStatus}`);
-    assert.deepEqual((await listManagedSessionRecords(queueDir)).map((record) => record.session_id), [
-      `ses_${failure.expectedStatus}`,
-    ]);
+    assert.deepEqual(
+      (await listManagedSessionRecords(queueDir)).map((record) => record.session_id),
+      [`ses_${failure.expectedStatus}`],
+    );
   });
 }
 
@@ -365,11 +378,14 @@ test("runQueueMaintenance deletes owned sessions before their task evidence usin
     OPENCODE_ADVISOR_OPENCODE_CMD: "opencode",
   };
   const config = {
-    ...getQueueConfig({
-      OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
-      OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS: "5000",
-      OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
-    }, "linux"),
+    ...getQueueConfig(
+      {
+        OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
+        OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS: "5000",
+        OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
+      },
+      "linux",
+    ),
     queueDir,
     env,
     platform: "linux",
@@ -389,9 +405,7 @@ test("runQueueMaintenance deletes owned sessions before their task evidence usin
   assert.equal(await readTaskFile(queueDir, expiredTask.id), null);
   assert.deepEqual(
     commands.map((command) => command.args),
-    [
-      ["session", "delete", "ses_expired", "--pure"],
-    ],
+    [["session", "delete", "ses_expired", "--pure"]],
   );
   assert.equal(commands[0].options.cwd, "/repo");
   assert.equal(commands[0].options.env.XDG_CONFIG_HOME, profile.paths.configHome);
@@ -400,7 +414,10 @@ test("runQueueMaintenance deletes owned sessions before their task evidence usin
   assert.equal(commands[0].options.env.OPENAI_API_KEY, undefined);
   assert.equal(commands[0].options.env.OPENCODE_ADVISOR_PROVIDER_KEY, undefined);
   assert.equal(commands[0].options.env.OPENCODE_CONFIG_CONTENT.includes(profile.credential), false);
-  assert.deepEqual((await listManagedSessionRecords(queueDir)).map((record) => record.session_id), ["ses_fresh"]);
+  assert.deepEqual(
+    (await listManagedSessionRecords(queueDir)).map((record) => record.session_id),
+    ["ses_fresh"],
+  );
   assert.equal(JSON.stringify(await readTaskFile(queueDir, retainedTask.id)).includes(profile.paths.home), false);
   assertNoPersistedProfileValues(await readTaskFile(queueDir, retainedTask.id));
 });
@@ -423,10 +440,13 @@ test("runQueueMaintenance deletes more than one hundred owned sessions without l
   await runQueueMaintenance({
     queueDir,
     config: {
-      ...getQueueConfig({
-        OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
-        OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
-      }, "linux"),
+      ...getQueueConfig(
+        {
+          OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
+          OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
+        },
+        "linux",
+      ),
       queueDir,
       env: { PATH: "/safe/bin", OPENCODE_ADVISOR_OPENCODE_CMD: "opencode" },
       platform: "linux",
@@ -440,9 +460,18 @@ test("runQueueMaintenance deletes more than one hundred owned sessions without l
   });
 
   assert.equal(commands.length, 105);
-  assert.equal(commands.every((call) => call.args[0] === "session" && call.args[1] === "delete"), true);
-  assert.equal(commands.some((call) => call.args.includes("list")), false);
-  assert.equal(commands.every((call) => call.args.at(-1) === "--pure"), true);
+  assert.equal(
+    commands.every((call) => call.args[0] === "session" && call.args[1] === "delete"),
+    true,
+  );
+  assert.equal(
+    commands.some((call) => call.args.includes("list")),
+    false,
+  );
+  assert.equal(
+    commands.every((call) => call.args.at(-1) === "--pure"),
+    true,
+  );
   assert.deepEqual(await listManagedSessionRecords(queueDir), []);
 });
 
@@ -474,10 +503,13 @@ test("runQueueMaintenance retains ownership records after delete failures and re
   }
 
   const config = {
-    ...getQueueConfig({
-      OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
-      OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
-    }, "linux"),
+    ...getQueueConfig(
+      {
+        OPENCODE_ADVISOR_SESSION_RETENTION_MS: "5000",
+        OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "1",
+      },
+      "linux",
+    ),
     queueDir,
     env: { PATH: "/safe/bin", OPENCODE_ADVISOR_OPENCODE_CMD: "opencode" },
     platform: "linux",
@@ -492,11 +524,11 @@ test("runQueueMaintenance retains ownership records after delete failures and re
       return { code: 1, stdout: "", stderr: "delete failed" };
     },
   });
-  assert.deepEqual(
-    (await listManagedSessionRecords(queueDir)).map((record) => record.session_id).sort(),
-    ["ses_nonzero", "ses_throwing"],
-  );
-  assert.equal("session_id" in await readTaskFile(queueDir, "ocq_faileddelete"), false);
+  assert.deepEqual((await listManagedSessionRecords(queueDir)).map((record) => record.session_id).sort(), [
+    "ses_nonzero",
+    "ses_throwing",
+  ]);
+  assert.equal("session_id" in (await readTaskFile(queueDir, "ocq_faileddelete")), false);
 
   await runQueueMaintenance({
     queueDir,
@@ -640,10 +672,7 @@ test("getQueueConfig treats OPENCODE_ADVISOR_QUEUE_DIR as the direct queue direc
 
 test("getQueueConfig keeps queue state under an explicitly configured advisor profile", () => {
   const advisorHome = path.join(os.tmpdir(), "advisor-profile-home");
-  const config = getQueueConfig(
-    { OPENCODE_ADVISOR_HOME: advisorHome },
-    process.platform,
-  );
+  const config = getQueueConfig({ OPENCODE_ADVISOR_HOME: advisorHome }, process.platform);
 
   assert.equal(config.queueDir, path.join(path.resolve(advisorHome), "queue"));
 });
@@ -666,10 +695,7 @@ test("ensureQueueRunner normalizes a relative queue override before spawning the
     nodeExec: process.execPath,
   });
 
-  assert.equal(
-    spawnOptions.env.OPENCODE_ADVISOR_QUEUE_DIR,
-    path.resolve(relativeQueueDir),
-  );
+  assert.equal(spawnOptions.env.OPENCODE_ADVISOR_QUEUE_DIR, path.resolve(relativeQueueDir));
   assert.equal(spawnOptions.cwd, path.resolve(relativeQueueDir));
 });
 
@@ -835,11 +861,14 @@ test("processQueueOnce claims a queued task exactly once across competing runner
     },
     process.platform,
   );
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_competingclaim",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "claim once" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_competingclaim",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "claim once" },
+    }),
+  );
 
   const barrier = createBarrier(2);
   const executions = [];
@@ -869,19 +898,19 @@ test("processQueueOnce claims a queued task exactly once across competing runner
   assert.deepEqual(executions, ["ocq_competingclaim"]);
   assert.equal(task.status, "completed");
   assert.equal(task.attempt_count, 1);
-  assert.deepEqual(
-    [...first.startedIds, ...second.startedIds],
-    ["ocq_competingclaim"],
-  );
+  assert.deepEqual([...first.startedIds, ...second.startedIds], ["ocq_competingclaim"]);
 });
 
 test("runQueueRunner refreshes its lease while a task is still running", async () => {
   const queueDir = createTempDir();
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_longrunninglease",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "keep lease fresh" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_longrunninglease",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "keep lease fresh" },
+    }),
+  );
 
   const started = createGate();
   const finish = createGate();
@@ -911,11 +940,14 @@ test("runQueueRunner refreshes its lease while a task is still running", async (
 
 test("runQueueRunner waits for an in-flight heartbeat without queuing later refreshes", async () => {
   const queueDir = createTempDir();
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_heartbeatcleanup",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "finish heartbeat cleanup" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_heartbeatcleanup",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "finish heartbeat cleanup" },
+    }),
+  );
 
   const taskStarted = createGate();
   const finishTask = createGate();
@@ -941,11 +973,7 @@ test("runQueueRunner waits for an in-flight heartbeat without queuing later refr
     if (heartbeatReleased && isRunnerReleaseLock) {
       releaseLockAcquisitionsAfterHeartbeat += 1;
     }
-    if (
-      holdNextHeartbeat &&
-      !heartbeatHeld &&
-      isRunnerReleaseLock
-    ) {
+    if (holdNextHeartbeat && !heartbeatHeld && isRunnerReleaseLock) {
       heartbeatHeld = true;
       heartbeatStarted.open();
       await releaseHeartbeat.wait();
@@ -996,11 +1024,14 @@ test("runQueueRunner waits for an in-flight heartbeat without queuing later refr
 
 test("runQueueRunner does not start work when the initial heartbeat loses its lease", async () => {
   const queueDir = createTempDir();
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_initialheartbeat",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "wait for initial heartbeat" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_initialheartbeat",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "wait for initial heartbeat" },
+    }),
+  );
 
   const readFile = fs.readFile;
   let runnerLockReads = 0;
@@ -1043,11 +1074,14 @@ test("runQueueRunner does not start work when the initial heartbeat loses its le
 
 test("a public poll keeps an over-TTL running task with a fresh lease pending", async () => {
   const queueDir = createTempDir();
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_publiclongrun",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "stay pending" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_publiclongrun",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "stay pending" },
+    }),
+  );
 
   const started = createGate();
   const finish = createGate();
@@ -1290,11 +1324,14 @@ test("runQueueRunner recovers immediately when a fresh lease owner is dead", asy
     lease_expires_at: new Date(Date.now() + 600000).toISOString(),
     started_at: new Date().toISOString(),
   };
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_freshdeadowner",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "recover dead owner" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_freshdeadowner",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "recover dead owner" },
+    }),
+  );
   writeFileSync(path.join(queueDir, "_runner.lock"), `${JSON.stringify(owner)}\n`, "utf8");
   writeFileSync(path.join(queueDir, "_runner.json"), `${JSON.stringify(owner)}\n`, "utf8");
 
@@ -1326,11 +1363,14 @@ test("runQueueRunner recovers immediately when a fresh lease owner is dead", asy
 
 test("runQueueRunner only releases the lease it owns", async () => {
   const queueDir = createTempDir();
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_successorlease",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "preserve successor" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_successorlease",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "preserve successor" },
+    }),
+  );
 
   const handlers = new Map();
   const successor = {
@@ -1361,14 +1401,8 @@ test("runQueueRunner only releases the lease it owns", async () => {
     },
   });
 
-  assert.deepEqual(
-    JSON.parse(readFileSync(path.join(queueDir, "_runner.lock"), "utf8")),
-    successor,
-  );
-  assert.deepEqual(
-    JSON.parse(readFileSync(path.join(queueDir, "_runner.json"), "utf8")),
-    successor,
-  );
+  assert.deepEqual(JSON.parse(readFileSync(path.join(queueDir, "_runner.lock"), "utf8")), successor);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(queueDir, "_runner.json"), "utf8")), successor);
 });
 
 test("a superseded runner cannot overwrite a successor task result", async () => {
@@ -1448,11 +1482,14 @@ test("runQueueRunner releases its lease after repeated loop errors", async () =>
   assert.equal(readdirSync(queueDir).includes("_runner.json"), false);
 
   unlinkSync(path.join(queueDir, "ocq_looperror.json"));
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_recoveredaftererror",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "recover clean runner" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_recoveredaftererror",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "recover clean runner" },
+    }),
+  );
   const recovered = await runQueueRunner({
     env: {
       OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
@@ -1761,12 +1798,15 @@ test("processQueueOnce reclaims tasks when matching runner heartbeats are missin
     const started = [];
     await processQueueOnce({
       queueDir,
-      config: getQueueConfig({
-        OPENCODE_ADVISOR_CONCURRENCY_GLOBAL: "1",
-        OPENCODE_ADVISOR_CONCURRENCY_PLANNER: "1",
-        OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "1",
-        OPENCODE_ADVISOR_TASK_TTL_MS: "600000",
-      }, process.platform),
+      config: getQueueConfig(
+        {
+          OPENCODE_ADVISOR_CONCURRENCY_GLOBAL: "1",
+          OPENCODE_ADVISOR_CONCURRENCY_PLANNER: "1",
+          OPENCODE_ADVISOR_QUEUE_RUNNING_STALE_MS: "1",
+          OPENCODE_ADVISOR_TASK_TTL_MS: "600000",
+        },
+        process.platform,
+      ),
       runnerId: "runner_recovery",
       runTask: async (task) => {
         started.push(task.id);
@@ -1787,11 +1827,14 @@ test("repeated pending polls do not spawn a runner while a fresh live lease exis
     lease_expires_at: new Date(Date.now() + 600000).toISOString(),
     started_at: new Date().toISOString(),
   };
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_freshleasepoll",
-    role: "reviewer",
-    input: { cwd: "/repo", question: "wait for the live runner" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_freshleasepoll",
+      role: "reviewer",
+      input: { cwd: "/repo", question: "wait for the live runner" },
+    }),
+  );
   writeFileSync(path.join(queueDir, "_runner.lock"), `${JSON.stringify(liveRunner)}\n`, "utf8");
   writeFileSync(path.join(queueDir, "_runner.json"), `${JSON.stringify(liveRunner)}\n`, "utf8");
 
@@ -1818,11 +1861,14 @@ test("repeated pending polls do not spawn a runner while a fresh live lease exis
 
 test("repeated pending polls start only one runner before it records a lease", async () => {
   const queueDir = createTempDir();
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_startingrunnerpoll",
-    role: "reviewer",
-    input: { cwd: "/repo", question: "wait for the starting runner" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_startingrunnerpoll",
+      role: "reviewer",
+      input: { cwd: "/repo", question: "wait for the starting runner" },
+    }),
+  );
 
   let spawnCount = 0;
   const queue = createTaskQueue({
@@ -1844,11 +1890,14 @@ test("repeated pending polls start only one runner before it records a lease", a
 
 test("pending polls share a runner startup guard across task queue instances", async () => {
   const queueDir = createTempDir();
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_sharedstartingrunner",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "share runner startup" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_sharedstartingrunner",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "share runner startup" },
+    }),
+  );
 
   let spawnCount = 0;
   const options = {
@@ -1874,11 +1923,14 @@ test("pending polls share a runner startup guard across task queue instances", a
 
 test("a failed runner startup does not block a later pending poll", async () => {
   const queueDir = createTempDir();
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_failedstartingrunner",
-    role: "reviewer",
-    input: { cwd: "/repo", question: "retry runner startup" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_failedstartingrunner",
+      role: "reviewer",
+      input: { cwd: "/repo", question: "retry runner startup" },
+    }),
+  );
 
   let spawnCount = 0;
   const failedQueue = createTaskQueue({
@@ -1889,10 +1941,7 @@ test("a failed runner startup does not block a later pending poll", async () => 
       throw new Error("runner startup failed");
     },
   });
-  await assert.rejects(
-    failedQueue.getTaskResult({ task_id: "ocq_failedstartingrunner" }),
-    /runner startup failed/,
-  );
+  await assert.rejects(failedQueue.getTaskResult({ task_id: "ocq_failedstartingrunner" }), /runner startup failed/);
 
   const retryQueue = createTaskQueue({
     env: { OPENCODE_ADVISOR_QUEUE_DIR: queueDir },
@@ -1911,11 +1960,14 @@ test("a failed runner startup does not block a later pending poll", async () => 
 
 test("a stale runner startup marker permits a later pending poll to retry", async () => {
   const queueDir = createTempDir();
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_stalestartingrunner",
-    role: "planner",
-    input: { cwd: "/repo", current_plan: "retry after stale startup" },
-  }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_stalestartingrunner",
+      role: "planner",
+      input: { cwd: "/repo", current_plan: "retry after stale startup" },
+    }),
+  );
 
   let spawnCount = 0;
   const queue = createTaskQueue({
@@ -2088,7 +2140,10 @@ test("createTaskQueue keeps a temporarily unreadable task pending instead of exp
 
 test("createTaskQueue returns queue_full without spawning the runner", async () => {
   const queueDir = mkdtempSync(path.join(os.tmpdir(), "ocq-"));
-  await writeTaskFile(queueDir, createTaskFile({ id: "ocq_pendingone", role: "planner", input: { current_plan: "a" } }));
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({ id: "ocq_pendingone", role: "planner", input: { current_plan: "a" } }),
+  );
   await writeTaskFile(queueDir, createTaskFile({ id: "ocq_pendingtwo", role: "reviewer", input: { question: "b" } }));
 
   let spawnCalled = false;
@@ -2303,7 +2358,10 @@ test("createTaskQueue tolerates concurrent runner-state reads during parallel su
   await runnerPromise;
 
   assert.equal(submissions.length, 6);
-  assert.equal(submissions.some((item) => item?.error === "queued"), true);
+  assert.equal(
+    submissions.some((item) => item?.error === "queued"),
+    true,
+  );
 });
 
 test("writeTaskFile persists task files atomically", async () => {
@@ -2447,12 +2505,7 @@ test("writeTaskFile preserves queue control fields while redacting profile value
   assert.equal(Object.hasOwn(stored, "profile"), false);
   assert.equal(Object.hasOwn(stored, "credential"), false);
 
-  const sensitiveValues = [
-    profile.credential,
-    profile.config.provider.base_url,
-    "running",
-    "opencode_failed",
-  ];
+  const sensitiveValues = [profile.credential, profile.config.provider.base_url, "running", "opencode_failed"];
   for (const value of sensitiveValues) {
     assert.equal(JSON.stringify(stored.input).includes(value), false, value);
   }
@@ -2500,16 +2553,24 @@ test("processQueueOnce redacts current profile values from success and thrown re
     process.platform,
   );
   const sensitiveText = PERSISTENCE_PROFILE_VALUES.join(" ");
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_profilesuccess",
-    role: "reviewer",
-    input: { question: "success result redaction" },
-  }), { profile: PERSISTENCE_PROFILE });
-  await writeTaskFile(queueDir, createTaskFile({
-    id: "ocq_profilefailure",
-    role: "planner",
-    input: { current_plan: "failure result redaction" },
-  }), { profile: PERSISTENCE_PROFILE });
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_profilesuccess",
+      role: "reviewer",
+      input: { question: "success result redaction" },
+    }),
+    { profile: PERSISTENCE_PROFILE },
+  );
+  await writeTaskFile(
+    queueDir,
+    createTaskFile({
+      id: "ocq_profilefailure",
+      role: "planner",
+      input: { current_plan: "failure result redaction" },
+    }),
+    { profile: PERSISTENCE_PROFILE },
+  );
 
   await processQueueOnce({
     queueDir,

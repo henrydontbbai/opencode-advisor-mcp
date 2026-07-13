@@ -144,8 +144,14 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
 
   assert.equal(report.ok, true);
   assert.equal(report.bucket, null);
-  assert.deepEqual(commandCalls.map((call) => call.command), [firstPathCommand, firstPathCommand]);
-  assert.equal(commandCalls.some((call) => call.command === "opencode"), false);
+  assert.deepEqual(
+    commandCalls.map((call) => call.command),
+    [firstPathCommand, firstPathCommand],
+  );
+  assert.equal(
+    commandCalls.some((call) => call.command === "opencode"),
+    false,
+  );
   for (const [index, call] of commandCalls.entries()) {
     assert.deepEqual(call.args.slice(0, 13), [
       "run",
@@ -194,45 +200,52 @@ test("runDoctor succeeds with source-local health checks and sanitized payload",
   assert.equal(plannerDeps.useQueue, false);
   assert.equal(typeof plannerDeps.loadAdvisorProfile, "function");
   assert.match(plannerDeps.taskId, /^doctor-health-planner_[a-f0-9]{32}$/);
-  assert.deepEqual(recordedSessions.map((record) => ({
-    sessionId: record.sessionId,
-    cwd: record.cwd,
-    title: record.title,
-  })), [
-    {
-      sessionId: "ses_doctor_1",
-      cwd: WINDOWS_CHILD_REPO,
-      title: commandCalls[0].args[13],
-    },
-    {
-      sessionId: "ses_doctor_2",
-      cwd: WINDOWS_CHILD_REPO,
-      title: commandCalls[1].args[13],
-    },
-    {
-      sessionId: "ses_doctor_health_reviewer",
-      cwd: WINDOWS_CHILD_REPO,
-      title: `opencode-advisor:${advisorDeps.taskId}`,
-    },
-    {
-      sessionId: "ses_doctor_health_planner",
-      cwd: WINDOWS_CHILD_REPO,
-      title: `opencode-advisor:${plannerDeps.taskId}`,
-    },
-  ]);
-  assert.equal(report.steps.every((step) => step.ok), true);
+  assert.deepEqual(
+    recordedSessions.map((record) => ({
+      sessionId: record.sessionId,
+      cwd: record.cwd,
+      title: record.title,
+    })),
+    [
+      {
+        sessionId: "ses_doctor_1",
+        cwd: WINDOWS_CHILD_REPO,
+        title: commandCalls[0].args[13],
+      },
+      {
+        sessionId: "ses_doctor_2",
+        cwd: WINDOWS_CHILD_REPO,
+        title: commandCalls[1].args[13],
+      },
+      {
+        sessionId: "ses_doctor_health_reviewer",
+        cwd: WINDOWS_CHILD_REPO,
+        title: `opencode-advisor:${advisorDeps.taskId}`,
+      },
+      {
+        sessionId: "ses_doctor_health_planner",
+        cwd: WINDOWS_CHILD_REPO,
+        title: `opencode-advisor:${plannerDeps.taskId}`,
+      },
+    ],
+  );
+  assert.equal(
+    report.steps.every((step) => step.ok),
+    true,
+  );
 });
 
 test("runDoctor fails closed when direct session ownership cannot be persisted", async () => {
   const report = await runDoctor({
     cwd: "/repo",
     env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
-    runCommand: async () => createCommandResult({
-      stdout: [
-        JSON.stringify({ type: "step", sessionID: "ses_doctor_unrecorded" }),
-        JSON.stringify({ type: "text", part: { text: "OK" } }),
-      ].join("\n"),
-    }),
+    runCommand: async () =>
+      createCommandResult({
+        stdout: [
+          JSON.stringify({ type: "step", sessionID: "ses_doctor_unrecorded" }),
+          JSON.stringify({ type: "text", part: { text: "OK" } }),
+        ].join("\n"),
+      }),
     recordManagedSession: async () => {
       throw new Error("ownership storage unavailable");
     },
@@ -295,12 +308,7 @@ test("runDoctor falls back from PATH to a trusted Windows OpenCode executable", 
   });
 
   assert.equal(report.ok, true);
-  assert.deepEqual(commandCalls, [
-    pathCommand,
-    fallbackCommand,
-    pathCommand,
-    fallbackCommand,
-  ]);
+  assert.deepEqual(commandCalls, [pathCommand, fallbackCommand, pathCommand, fallbackCommand]);
 });
 
 test("runDoctor does not fall back after a non-spawn ENOENT failure", async () => {
@@ -368,10 +376,11 @@ test("runDoctor classifies provider authentication failures without leaking prov
   const report = await runDoctor({
     cwd: "/repo",
     env: { OPENCODE_ADVISOR_ALLOWED_ROOTS: "/repo" },
-    runCommand: async () => createCommandResult({
-      code: 1,
-      stderr: `401 Invalid token for https://models.example.test/v1 using ${secret}`,
-    }),
+    runCommand: async () =>
+      createCommandResult({
+        code: 1,
+        stderr: `401 Invalid token for https://models.example.test/v1 using ${secret}`,
+      }),
     askOpenCodeAdvisorImpl: async () => {
       throw new Error("should not reach health check");
     },
@@ -448,9 +457,10 @@ test("runDoctor classifies agent fallback from direct OpenCode output", async ()
     runCommand: async () => {
       directCalls += 1;
       return createCommandResult({
-        stdout: directCalls === 1
-          ? 'agent "codex-advisor" not found\nFalling back to default agent'
-          : JSON.stringify({ type: "text", part: { text: "OK" } }),
+        stdout:
+          directCalls === 1
+            ? 'agent "codex-advisor" not found\nFalling back to default agent'
+            : JSON.stringify({ type: "text", part: { text: "OK" } }),
       });
     },
     askOpenCodeAdvisorImpl: async () => {
@@ -683,17 +693,18 @@ test("findPayloadLeaks reports forbidden success fields", () => {
 
 test("findPayloadLeaks ignores cwd mentions inside advisor_text", () => {
   assert.deepEqual(
-    findPayloadLeaks(createCanonicalSuccessPayload({
-      advisor_text: `Reviewed ${WINDOWS_CHILD_REPO}`,
-    }), { cwd: WINDOWS_CHILD_REPO }),
+    findPayloadLeaks(
+      createCanonicalSuccessPayload({
+        advisor_text: `Reviewed ${WINDOWS_CHILD_REPO}`,
+      }),
+      { cwd: WINDOWS_CHILD_REPO },
+    ),
     [],
   );
 });
 
 test("findPayloadLeaks accepts the canonical server success response shape", () => {
-  const payload = Object.fromEntries(
-    SUCCESS_RESPONSE_KEYS.map((key) => [key, createCanonicalSuccessPayload()[key]]),
-  );
+  const payload = Object.fromEntries(SUCCESS_RESPONSE_KEYS.map((key) => [key, createCanonicalSuccessPayload()[key]]));
 
   assert.deepEqual(findPayloadLeaks(payload), []);
 });
@@ -736,9 +747,10 @@ test("runDoctor rejects provider settings echoed inside an otherwise valid healt
     existsSync: (candidate) => candidate === command,
     isFile: (candidate) => candidate === command,
     runCommand: async () => createCommandResult(),
-    askOpenCodeAdvisorImpl: async () => createCanonicalSuccessPayload({
-      advisor_text: `${secret} https://models.example.test/v1 test-provider/test-model`,
-    }),
+    askOpenCodeAdvisorImpl: async () =>
+      createCanonicalSuccessPayload({
+        advisor_text: `${secret} https://models.example.test/v1 test-provider/test-model`,
+      }),
     askOpenCodePlannerImpl: async () => createCanonicalPlannerSuccessPayload(),
   });
 

@@ -8,10 +8,7 @@ import { isSensitiveEnvironmentName } from "./runtime-shared.mjs";
 const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const MODEL_ID_MAX_LENGTH = 256;
 const OPENCODE_SCHEMA_URL = "https://opencode.ai/config.json";
-const AGENT_TEMPLATE_FILENAMES = Object.freeze([
-  "codex-advisor.md",
-  "codex-planning-partner.md",
-]);
+const AGENT_TEMPLATE_FILENAMES = Object.freeze(["codex-advisor.md", "codex-planning-partner.md"]);
 const BUNDLED_AGENT_TEMPLATE_URLS = Object.freeze(
   Object.fromEntries(
     AGENT_TEMPLATE_FILENAMES.map((filename) => [filename, new URL(`../agents/${filename}`, import.meta.url)]),
@@ -54,7 +51,8 @@ function canEnforcePosixPermissions(platform) {
 
 export const PROVIDER_KEY_ENV = "OPENCODE_ADVISOR_PROVIDER_KEY";
 export const PROFILE_VERSION = 1;
-export const SETUP_GUIDANCE = "OpenCode Advisor is not configured. Run `opencode-advisor-setup` before using the MCP tools.";
+export const SETUP_GUIDANCE =
+  "OpenCode Advisor is not configured. Run `opencode-advisor-setup` before using the MCP tools.";
 export const SETUP_REQUIRED_CODE = "OPENCODE_ADVISOR_SETUP_REQUIRED";
 
 function pathForPlatform(platform) {
@@ -72,9 +70,10 @@ function defaultAdvisorHome(env, platform, pathApi) {
 export function getAdvisorProfilePaths(env = process.env, platform = process.platform) {
   const pathApi = pathForPlatform(platform);
   const configured = env.OPENCODE_ADVISOR_HOME;
-  const home = configured == null || !String(configured).trim()
-    ? defaultAdvisorHome(env, platform, pathApi)
-    : String(configured).trim();
+  const home =
+    configured == null || !String(configured).trim()
+      ? defaultAdvisorHome(env, platform, pathApi)
+      : String(configured).trim();
   if (home.includes("\0") || !pathApi.isAbsolute(home)) {
     throw profileError("OPENCODE_ADVISOR_HOME must be an absolute path.");
   }
@@ -138,7 +137,13 @@ function validateBaseUrl(value) {
   } catch {
     throw profileError("provider.base_url must be an absolute HTTP or HTTPS URL.");
   }
-  if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || parsed.username || parsed.password || parsed.search || parsed.hash) {
+  if (
+    (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
     throw profileError("provider.base_url must be an HTTP or HTTPS API root without credentials, query, or fragment.");
   }
   try {
@@ -200,7 +205,9 @@ export function validateAdvisorConfig(value) {
   requireOnlyKeys(provider, ["id", "name", "base_url", "transport", "models"], "provider");
   const id = requiredString(provider.id, "provider.id", 64);
   if (!PROVIDER_ID_PATTERN.test(id)) {
-    throw profileError("provider.id must start with a lowercase letter and contain only lowercase letters, digits, and hyphens.");
+    throw profileError(
+      "provider.id must start with a lowercase letter and contain only lowercase letters, digits, and hyphens.",
+    );
   }
   const transport = provider.transport;
   if (transport !== "responses" && transport !== "chat_completions") {
@@ -245,13 +252,15 @@ export function buildOpenCodeOverlay(config) {
     variants[role.variant] = { reasoningEffort: role.variant };
     variantsByModel.set(role.model, variants);
   }
-  const models = Object.fromEntries(provider.models.map((model) => [
-    model.id,
-    {
-      name: model.name,
-      ...(variantsByModel.has(model.id) ? { variants: variantsByModel.get(model.id) } : {}),
-    },
-  ]));
+  const models = Object.fromEntries(
+    provider.models.map((model) => [
+      model.id,
+      {
+        name: model.name,
+        ...(variantsByModel.has(model.id) ? { variants: variantsByModel.get(model.id) } : {}),
+      },
+    ]),
+  );
   return JSON.stringify({
     $schema: OPENCODE_SCHEMA_URL,
     enabled_providers: [provider.id],
@@ -284,9 +293,7 @@ function overlaysMatch(expected, actual) {
 }
 
 function copyChildEnvironment(env, platform) {
-  const allowedNames = platform === "win32"
-    ? WINDOWS_CHILD_ENVIRONMENT_NAMES
-    : POSIX_CHILD_ENVIRONMENT_NAMES;
+  const allowedNames = platform === "win32" ? WINDOWS_CHILD_ENVIRONMENT_NAMES : POSIX_CHILD_ENVIRONMENT_NAMES;
   const childEnv = {};
   for (const name of allowedNames) {
     if (typeof env[name] === "string" && env[name] && !isSensitiveEnvironmentName(name)) {
@@ -294,12 +301,7 @@ function copyChildEnvironment(env, platform) {
     }
   }
   for (const [name, value] of Object.entries(env)) {
-    if (
-      /^LC_[A-Z0-9_]+$/i.test(name)
-      && typeof value === "string"
-      && value
-      && !isSensitiveEnvironmentName(name)
-    ) {
+    if (/^LC_[A-Z0-9_]+$/i.test(name) && typeof value === "string" && value && !isSensitiveEnvironmentName(name)) {
       childEnv[name] = value;
     }
   }
@@ -348,11 +350,7 @@ export function redactAdvisorProviderValue(value, profile) {
   return value;
 }
 
-async function assertPrivateEntry(filePath, {
-  directory = false,
-  platform = process.platform,
-  fsImpl = fs,
-} = {}) {
+async function assertPrivateEntry(filePath, { directory = false, platform = process.platform, fsImpl = fs } = {}) {
   const details = await fsImpl.lstat(filePath);
   if (details.isSymbolicLink() || (directory ? !details.isDirectory() : !details.isFile())) {
     throw profileError("Advisor profile contains an unsafe filesystem entry.");
@@ -376,7 +374,13 @@ export function buildOpenCodeChildEnv({
   platform = process.platform,
 } = {}) {
   const validated = validateAdvisorConfig(config);
-  if (!paths?.home || !paths?.configHome || !paths?.dataHome || !paths?.opencodeConfigPath || !paths?.opencodeConfigDir) {
+  if (
+    !paths?.home ||
+    !paths?.configHome ||
+    !paths?.dataHome ||
+    !paths?.opencodeConfigPath ||
+    !paths?.opencodeConfigDir
+  ) {
     throw profileError("Advisor profile paths are incomplete.");
   }
   if (includeCredential && (typeof credential !== "string" || !credential)) {
@@ -433,20 +437,22 @@ export async function loadAdvisorProfile({
         paths.opencodeConfigDir,
         paths.agentsDir,
       ].map((directory) => assertPrivateEntry(directory, { directory: true, platform, fsImpl })),
-      ...[
-        paths.manifestPath,
-        paths.opencodeConfigPath,
-        ...Object.values(agentPaths),
-      ].map((filePath) => assertPrivateEntry(filePath, { platform, fsImpl })),
+      ...[paths.manifestPath, paths.opencodeConfigPath, ...Object.values(agentPaths)].map((filePath) =>
+        assertPrivateEntry(filePath, { platform, fsImpl }),
+      ),
     ]);
     const manifestText = await fsImpl.readFile(paths.manifestPath, "utf8");
     config = validateAdvisorConfig(JSON.parse(manifestText));
     const expectedOverlay = JSON.parse(buildOpenCodeOverlay(config));
     const storedOverlay = JSON.parse(await fsImpl.readFile(paths.opencodeConfigPath, "utf8"));
-    if (!overlaysMatch(expectedOverlay, storedOverlay)) throw profileError("OpenCode overlay does not match the advisor manifest.");
+    if (!overlaysMatch(expectedOverlay, storedOverlay))
+      throw profileError("OpenCode overlay does not match the advisor manifest.");
     const [storedAgentTemplates, bundledAgentTemplates] = await Promise.all([
       Promise.all(
-        AGENT_TEMPLATE_FILENAMES.map(async (filename) => [filename, await fsImpl.readFile(agentPaths[filename], "utf8")]),
+        AGENT_TEMPLATE_FILENAMES.map(async (filename) => [
+          filename,
+          await fsImpl.readFile(agentPaths[filename], "utf8"),
+        ]),
       ).then(Object.fromEntries),
       readBundledAgentTemplates(),
     ]);
@@ -535,7 +541,10 @@ export async function writeAdvisorProfile({
   ]);
   await writePrivateJson(paths.manifestPath, validated, { platform, fsImpl });
   await writePrivateJson(paths.opencodeConfigPath, JSON.parse(buildOpenCodeOverlay(validated)), { platform, fsImpl });
-  await writePrivateText(pathForPlatform(platform).join(paths.agentsDir, "codex-advisor.md"), advisorTemplate, { platform, fsImpl });
+  await writePrivateText(pathForPlatform(platform).join(paths.agentsDir, "codex-advisor.md"), advisorTemplate, {
+    platform,
+    fsImpl,
+  });
   await writePrivateText(
     pathForPlatform(platform).join(paths.agentsDir, "codex-planning-partner.md"),
     plannerTemplate,

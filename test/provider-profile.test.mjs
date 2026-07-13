@@ -56,10 +56,7 @@ test("provider profile maps Responses to the native OpenAI SDK without storing a
   assert.deepEqual(overlay.enabled_providers, ["advisor-provider"]);
   assert.equal(overlay.provider["advisor-provider"].npm, "@ai-sdk/openai");
   assert.equal(overlay.provider["advisor-provider"].options.baseURL, "https://models.example.test/v1");
-  assert.equal(
-    overlay.provider["advisor-provider"].options.apiKey,
-    "{env:OPENCODE_ADVISOR_PROVIDER_KEY}",
-  );
+  assert.equal(overlay.provider["advisor-provider"].options.apiKey, "{env:OPENCODE_ADVISOR_PROVIDER_KEY}");
   assert.equal(JSON.stringify(overlay).includes("sk-"), false);
   assert.equal(config.roles.reviewer.model, "reasoning-model");
   assert.equal(config.roles.planner.model, "fast-model");
@@ -73,10 +70,7 @@ test("provider profile maps Chat Completions to the OpenAI-compatible SDK", () =
   const overlay = JSON.parse(buildOpenCodeOverlay(config));
 
   assert.equal(overlay.provider["advisor-provider"].npm, "@ai-sdk/openai-compatible");
-  assert.equal(
-    overlay.provider["advisor-provider"].options.apiKey,
-    "{env:OPENCODE_ADVISOR_PROVIDER_KEY}",
-  );
+  assert.equal(overlay.provider["advisor-provider"].options.apiKey, "{env:OPENCODE_ADVISOR_PROVIDER_KEY}");
 });
 
 test("provider profile accepts optional per-role OpenCode variants", () => {
@@ -130,11 +124,14 @@ test("provider redaction removes configured values from nested object keys and v
     "reasoning-model",
     "advisor-provider/reasoning-model",
   ];
-  const redacted = redactAdvisorProviderValue({
-    [`provider-secret-${sensitiveValues[1]}`]: {
-      [`advisor-provider/reasoning-model-key`]: "provider-secret reasoning-model",
+  const redacted = redactAdvisorProviderValue(
+    {
+      [`provider-secret-${sensitiveValues[1]}`]: {
+        [`advisor-provider/reasoning-model-key`]: "provider-secret reasoning-model",
+      },
     },
-  }, profile);
+    profile,
+  );
 
   const serialized = JSON.stringify(redacted);
   for (const value of sensitiveValues) {
@@ -149,10 +146,11 @@ test("provider profile rejects URL credentials, query keys, and encoded control 
     "https://models.example.test/v1%0Ainjected",
   ]) {
     assert.throws(
-      () => validateAdvisorConfig({
-        ...RESPONSES_CONFIG,
-        provider: { ...RESPONSES_CONFIG.provider, base_url: baseUrl },
-      }),
+      () =>
+        validateAdvisorConfig({
+          ...RESPONSES_CONFIG,
+          provider: { ...RESPONSES_CONFIG.provider, base_url: baseUrl },
+        }),
       /provider\.base_url/i,
     );
   }
@@ -160,29 +158,34 @@ test("provider profile rejects URL credentials, query keys, and encoded control 
 
 test("provider profile rejects undeclared manifest fields that could persist secrets or dynamic roles", () => {
   assert.throws(
-    () => validateAdvisorConfig({
-      ...RESPONSES_CONFIG,
-      provider: { ...RESPONSES_CONFIG.provider, api_key: "plaintext-secret" },
-    }),
+    () =>
+      validateAdvisorConfig({
+        ...RESPONSES_CONFIG,
+        provider: { ...RESPONSES_CONFIG.provider, api_key: "plaintext-secret" },
+      }),
     /provider/i,
   );
   assert.throws(
-    () => validateAdvisorConfig({
-      ...RESPONSES_CONFIG,
-      roles: {
-        ...RESPONSES_CONFIG.roles,
-        implementer: { model: "reasoning-model" },
-      },
-    }),
+    () =>
+      validateAdvisorConfig({
+        ...RESPONSES_CONFIG,
+        roles: {
+          ...RESPONSES_CONFIG.roles,
+          implementer: { model: "reasoning-model" },
+        },
+      }),
     /roles/i,
   );
 });
 
 test("provider child environment isolates OpenCode settings and inherited credentials", () => {
   const config = validateAdvisorConfig(RESPONSES_CONFIG);
-  const paths = getAdvisorProfilePaths({
-    OPENCODE_ADVISOR_HOME: "C:\\advisor-profile",
-  }, "win32");
+  const paths = getAdvisorProfilePaths(
+    {
+      OPENCODE_ADVISOR_HOME: "C:\\advisor-profile",
+    },
+    "win32",
+  );
   const childEnv = buildOpenCodeChildEnv({
     config,
     paths,
@@ -198,7 +201,7 @@ test("provider child environment isolates OpenCode settings and inherited creden
       OPENAI_BASE_URL: "https://normal-openai.example.test/v1",
       THIRD_PARTY_ENDPOINT: "https://normal-third-party.example.test/v1",
       OPENCODE_CONFIG: "C:\\normal\\opencode.json",
-      OPENCODE_CONFIG_CONTENT: "{\"provider\":{}}",
+      OPENCODE_CONFIG_CONTENT: '{"provider":{}}',
       OPENCODE_DISABLE_PROJECT_CONFIG: "0",
       XDG_DATA_HOME: "C:\\normal\\data",
       CUSTOM_PROVIDER_KEY: "custom-provider-key",
@@ -323,19 +326,20 @@ test("provider profile rejects an agent template changed after setup before decr
     });
     writeFileSync(
       path.join(paths.agentsDir, "codex-advisor.md"),
-      "---\npermission:\n  \"*\": allow\n---\nmodified\n",
+      '---\npermission:\n  "*": allow\n---\nmodified\n',
       "utf8",
     );
 
     let credentialRead = false;
     await assert.rejects(
-      () => loadAdvisorProfile({
-        env: { OPENCODE_ADVISOR_HOME: home },
-        readCredential: async () => {
-          credentialRead = true;
-          return "provider-secret";
-        },
-      }),
+      () =>
+        loadAdvisorProfile({
+          env: { OPENCODE_ADVISOR_HOME: home },
+          readCredential: async () => {
+            credentialRead = true;
+            return "provider-secret";
+          },
+        }),
       (error) => error?.code === "OPENCODE_ADVISOR_SETUP_REQUIRED",
     );
     assert.equal(credentialRead, false);
@@ -417,27 +421,31 @@ test("provider profile accepts the OpenCode schema field added to an older gener
   }
 });
 
-test("POSIX profile loading rejects writable profile artifacts", {
-  skip: process.platform === "win32" ? "POSIX permission bits are not enforceable on Windows" : false,
-}, async () => {
-  const home = mkdtempSync(path.join(os.tmpdir(), "advisor-profile-permissions-"));
-  try {
-    const paths = getAdvisorProfilePaths({ OPENCODE_ADVISOR_HOME: home });
-    const agentTemplates = BUNDLED_AGENT_TEMPLATES;
-    await writeAdvisorProfile({ config: RESPONSES_CONFIG, paths, agentTemplates });
-    await writeProviderCredential({
-      credentialPath: paths.credentialPath,
-      credential: "provider-secret",
-      manifestFingerprint: getAdvisorConfigFingerprint(RESPONSES_CONFIG),
-      platform: TEST_CREDENTIAL_PLATFORM,
-    });
-    chmodSync(paths.manifestPath, 0o644);
+test(
+  "POSIX profile loading rejects writable profile artifacts",
+  {
+    skip: process.platform === "win32" ? "POSIX permission bits are not enforceable on Windows" : false,
+  },
+  async () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), "advisor-profile-permissions-"));
+    try {
+      const paths = getAdvisorProfilePaths({ OPENCODE_ADVISOR_HOME: home });
+      const agentTemplates = BUNDLED_AGENT_TEMPLATES;
+      await writeAdvisorProfile({ config: RESPONSES_CONFIG, paths, agentTemplates });
+      await writeProviderCredential({
+        credentialPath: paths.credentialPath,
+        credential: "provider-secret",
+        manifestFingerprint: getAdvisorConfigFingerprint(RESPONSES_CONFIG),
+        platform: TEST_CREDENTIAL_PLATFORM,
+      });
+      chmodSync(paths.manifestPath, 0o644);
 
-    await assert.rejects(
-      () => loadAdvisorProfile({ env: { OPENCODE_ADVISOR_HOME: home } }),
-      (error) => error?.code === "OPENCODE_ADVISOR_SETUP_REQUIRED",
-    );
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
-});
+      await assert.rejects(
+        () => loadAdvisorProfile({ env: { OPENCODE_ADVISOR_HOME: home } }),
+        (error) => error?.code === "OPENCODE_ADVISOR_SETUP_REQUIRED",
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  },
+);

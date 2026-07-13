@@ -8,9 +8,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const serverPath = fileURLToPath(new URL("../src/server.mjs", import.meta.url));
 const outsidePath = process.platform === "win32" ? "C:\\Windows" : "/tmp/not-allowed";
-const packageJson = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-);
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 async function withClient(fn) {
   const transport = new StdioClientTransport({
@@ -45,11 +43,7 @@ test("stdio MCP server lists all public tools", async () => {
     const listed = await client.listTools();
     const toolNames = listed.tools.map((tool) => tool.name).sort();
 
-    assert.deepEqual(toolNames, [
-      "ask_opencode_advisor",
-      "ask_opencode_planner",
-      "get_opencode_task",
-    ]);
+    assert.deepEqual(toolNames, ["ask_opencode_advisor", "ask_opencode_planner", "get_opencode_task"]);
   });
 });
 

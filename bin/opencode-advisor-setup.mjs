@@ -12,9 +12,12 @@ import {
 } from "../src/provider-profile.mjs";
 import { writeProviderCredential } from "../src/provider-credentials.mjs";
 
-const NON_INTERACTIVE_MESSAGE = "OpenCode Advisor setup requires an interactive terminal. Run `opencode-advisor-setup` from a terminal to configure the provider.\n";
-const ARGUMENTS_MESSAGE = "OpenCode Advisor setup does not accept command-line configuration or credentials. Run `opencode-advisor-setup` interactively.\n";
-const SETUP_FAILED_MESSAGE = "OpenCode Advisor setup could not complete. Check the entered provider settings and try again.\n";
+const NON_INTERACTIVE_MESSAGE =
+  "OpenCode Advisor setup requires an interactive terminal. Run `opencode-advisor-setup` from a terminal to configure the provider.\n";
+const ARGUMENTS_MESSAGE =
+  "OpenCode Advisor setup does not accept command-line configuration or credentials. Run `opencode-advisor-setup` interactively.\n";
+const SETUP_FAILED_MESSAGE =
+  "OpenCode Advisor setup could not complete. Check the entered provider settings and try again.\n";
 const SETUP_SUCCESS_MESSAGE = "OpenCode Advisor profile configured.\n";
 
 const binDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -150,7 +153,11 @@ export async function runSetup({
       transport: await ask(interactivePrompt, "transport", "Transport (responses or chat_completions)"),
       models: await ask(interactivePrompt, "models", "Model IDs (comma separated)"),
       reviewerModel: await ask(interactivePrompt, "reviewerModel", "Reviewer model ID"),
-      reviewerVariant: await ask(interactivePrompt, "reviewerVariant", "Reviewer reasoning variant (optional, e.g. high)"),
+      reviewerVariant: await ask(
+        interactivePrompt,
+        "reviewerVariant",
+        "Reviewer reasoning variant (optional, e.g. high)",
+      ),
       plannerModel: await ask(interactivePrompt, "plannerModel", "Planner model ID"),
       plannerVariant: await ask(interactivePrompt, "plannerVariant", "Planner reasoning variant (optional, e.g. max)"),
       apiKey: await askHidden(interactivePrompt, "apiKey", "Provider API key"),

@@ -143,11 +143,12 @@ test("custom OpenCode commands must be absolute executables and Windows fallback
   );
 
   assert.throws(
-    () => resolveOpencodeCommand("C:\\tools\\opencode.exe", {
-      platform: "win32",
-      exists: () => true,
-      isFile: () => false,
-    }),
+    () =>
+      resolveOpencodeCommand("C:\\tools\\opencode.exe", {
+        platform: "win32",
+        exists: () => true,
+        isFile: () => false,
+      }),
     /existing/i,
   );
 

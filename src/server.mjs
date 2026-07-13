@@ -21,15 +21,16 @@ import {
   recordManagedSession as recordManagedSessionOnDisk,
 } from "./session-lifecycle.mjs";
 
-const packageMetadata = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-);
+const packageMetadata = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 function getTaskQueue(deps = {}) {
-  return deps.taskQueue ?? createTaskQueue({
-    env: deps.env ?? process.env,
-    platform: deps.platform ?? process.platform,
-  });
+  return (
+    deps.taskQueue ??
+    createTaskQueue({
+      env: deps.env ?? process.env,
+      platform: deps.platform ?? process.platform,
+    })
+  );
 }
 
 function withDirectSessionOwnership(role, deps = {}) {
@@ -54,12 +55,7 @@ function withDirectSessionOwnership(role, deps = {}) {
   };
 }
 
-export {
-  extractOpenCodeText,
-  isPathInsideAllowedRoots,
-  parseAllowedRoots,
-  truncateText,
-};
+export { extractOpenCodeText, isPathInsideAllowedRoots, parseAllowedRoots, truncateText };
 
 export async function askOpenCodeAdvisor(input = {}, deps = {}) {
   if (deps.useQueue === false) {
@@ -151,7 +147,8 @@ export function createServer(deps = {}) {
     "ask_opencode_planner",
     {
       title: "Ask OpenCode Planner",
-      description: "Ask the local read-only OpenCode planning partner to improve a plan without taking over implementation.",
+      description:
+        "Ask the local read-only OpenCode planning partner to improve a plan without taking over implementation.",
       inputSchema: {
         ...commonInput,
         current_plan: z.string().optional(),

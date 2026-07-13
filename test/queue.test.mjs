@@ -364,7 +364,7 @@ test("runQueueRunner repeats maintenance while it remains alive", async () => {
   const runnerPromise = runQueueRunner({
     env: {
       OPENCODE_ADVISOR_QUEUE_DIR: queueDir,
-      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "300",
+      OPENCODE_ADVISOR_QUEUE_RUNNER_IDLE_MS: "5000",
       OPENCODE_ADVISOR_QUEUE_POLL_MS: "5",
       OPENCODE_ADVISOR_QUEUE_TASK_RETENTION_MS: "25",
       OPENCODE_ADVISOR_MAINTENANCE_INTERVAL_MS: "10",
@@ -380,6 +380,7 @@ test("runQueueRunner repeats maintenance while it remains alive", async () => {
   });
 
   await waitForCondition(async () => (await readTaskFile(queueDir, task.id)) === null);
+  assert.equal(typeof handlers.get("SIGTERM"), "function");
   handlers.get("SIGTERM")();
   await waitFor(runnerPromise);
 });

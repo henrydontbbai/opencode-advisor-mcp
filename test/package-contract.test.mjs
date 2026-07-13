@@ -294,11 +294,18 @@ test("published docs require independent provider setup and exclude legacy profi
   assert.doesNotMatch(releasingDoc, /opencode auth login|OPENCODE_ADVISOR_OPENCODE_DATA_HOME/i);
 });
 
-test("docs distinguish source, tarball, and published-package setup paths and list every queue control", () => {
+test("docs distinguish source and GitHub Release tarball setup paths and list every queue control", () => {
   assert.match(readme, /npm run setup/);
   assert.match(readme, /src\\\\server\.mjs/);
-  assert.match(readme, /after `0\.3\.0` is published/i);
-  assert.match(installDoc, /after `0\.3\.0` is published/i);
+  const releaseSha256 = "47a4697ad28e99fd85ba2951ac21289a566378948743526f2b1cde5cbd905fa1";
+  for (const document of [readme, installDoc]) {
+    assert.match(document, /releases\/download\/v0\.3\.0\/opencode-advisor-mcp-0\.3\.0\.tgz/i);
+    assert.match(document, /SHA256SUMS\.txt/);
+    assert.match(document, new RegExp(releaseSha256));
+    assert.match(document, /\$expected {2}opencode-advisor-mcp-0\.3\.0\.tgz/);
+    assert.match(document, /did not publish to npm/i);
+    assert.match(document, /no npm-registry install path is supported/i);
+  }
   assert.match(releasingDoc, /credential-manifest binding/i);
   assert.match(releasingDoc, /manifest-overlay binding/i);
 

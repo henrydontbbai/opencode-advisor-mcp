@@ -6,12 +6,14 @@ Status meanings:
 
 - `covered`: already addressed on `main`; close the issue
 - `duplicate`: overlaps another open or merged-tracked issue; close in favor of the canonical one
+- `consolidate`: close an over-broad bucket after preserving its focused work in narrower issues
 - `next`: keep for the next focused maintenance batch
 - `deferred`: real idea or concern, but intentionally out of the current maintenance lane
+- `wontfix`: deliberately rejected because the proposed behavior weakens a product or security boundary
 
 ## Release Closeout Evidence
 
-The release baseline documented below is `f441977` (the `#106` merge); `#100`, `#101`, and `#103` are governance-only metadata updates in this sequence. The rows were checked against the GitHub merge commit, required Ubuntu/Windows x Node 20/22 CI checks, and GitHub closing references on 2026-07-13. A blank closing-reference cell means the PR did not declare an issue for automatic closure; it is not evidence that a separately tracked issue was skipped.
+The release commit is `f441977` (the `#106` merge). The current post-release baseline is `5ccc59f` (the `#109` merge); `#100`, `#101`, `#103`, and `#107` are governance-only metadata updates in this sequence. The rows were checked against the GitHub merge commit, required Ubuntu/Windows x Node 20/22 CI checks, and GitHub closing references on 2026-07-13. A blank closing-reference cell means the PR did not declare an issue for automatic closure; it is not evidence that a separately tracked issue was skipped.
 
 | PR | Merge commit on `main` | CI evidence | GitHub closing references |
 |---|---|---|---|
@@ -29,8 +31,11 @@ The release baseline documented below is `f441977` (the `#106` merge); `#100`, `
 | #104 | `06122dc` | main push CI run `29256376659`: Ubuntu/Windows x Node 20/22 succeeded | none; CI timing-flake test fix |
 | #105 | `e4164b7` | main push CI run `29258169856`: Ubuntu/Windows x Node 20/22 succeeded | none; managed-session retention, part of #45 |
 | #106 | `f441977` | main push CI run `29259255830`: Ubuntu/Windows x Node 20/22 succeeded | none; `0.3.0` release preparation |
+| #107 | `73f7e8b` | required Ubuntu/Windows x Node 20/22 checks succeeded | none; release-governance evidence |
+| #108 | `1d7e972` | required Ubuntu/Windows x Node 20/22 checks succeeded | none; Responses request-contract evidence |
+| #109 | `5ccc59f` | main push CI run `29266814136`: Ubuntu/Windows x Node 20/22 succeeded | #73 |
 
-`0.3.0` is prepared at `f441977`, but this table is not publication evidence. npm publish, registry verification, tag `v0.3.0`, and the GitHub Release remain separate authorized release operations.
+`v0.3.0` was published as source-only GitHub Release `353319523` from `f441977` on 2026-07-13. Asset `475724780` (`opencode-advisor-mcp-0.3.0.tgz`) has size `49496` and GitHub API digest `sha256:47a4697ad28e99fd85ba2951ac21289a566378948743526f2b1cde5cbd905fa1`; asset `475724781` is the matching `SHA256SUMS.txt`. GitHub reports `immutable:false`, so installation docs and this protected branch history independently pin the expected digest instead of trusting the mutable checksum asset alone. The tag dereferences to `f441977`, and the downloaded tarball passed a fresh-prefix install, all four bin smokes, the MCP `0.3.0` handshake, the exact three-tool list, a real provider doctor, and blocker-only OpenCode planner/reviewer gates. This release process performed no npm publication or registry identity operation. Later `#108/#109` changes remain post-release `Unreleased` work.
 
 ## Dependency Decision Evidence
 
@@ -43,6 +48,10 @@ The release baseline documented below is `f441977` (the `#106` merge); `#100`, `
 | #16 | covered | runtime and prompt-boundary stability coverage completed without a public-contract change | `#99` merged at `925b6b4`; issue automatically closed |
 | #34 | covered | queue recovery, heartbeat, polling, startup-reservation, and shared-runtime edge coverage completed | `#97` merged at `fea2d2b`; issue automatically closed |
 | #42 | covered | `zod` v4 dependency decision accepted and merged | `#3` merged at `eb541b8`; issue closed as completed |
+| #15 | covered | both bundled agents now deny every tool, so the old `glob`/`grep` precedence ambiguity no longer exists | agent templates and bin regression coverage on `main` |
+| #26 | covered | `test:doctor` runs in the four-platform CI matrix; `npm audit` remains an explicit non-blocking maintenance policy | `.github/workflows/ci.yml`, release gates, and this governance decision |
+| #70 | covered | the MCP cannot observe a host Codex timeout reliably; public docs already require the outer timeout to exceed the inner OpenCode timeout | `README.md` and `docs/CONFIGURATION.md` |
+| #73 | covered | doctor tests run in CI and the CLI now supports one sanitized machine-readable JSON report | `#109` merged at `5ccc59f`; issue automatically closed |
 | #46 | covered | allowed-roots now fail fast at server startup | `src/server.mjs`, merged in `#80` |
 | #47 | covered | diff context now goes through best-effort secret redaction | `src/opencode-core.mjs`, docs/tests on `main` |
 | #49 | covered | tool schemas are no longer shared/mutated across registrations | `src/server.mjs`, merged in `#80` |
@@ -75,10 +84,11 @@ The release baseline documented below is `f441977` (the `#106` merge); `#100`, `
 
 ## Next
 
-The dedicated `#16` and `#34` stability lanes are complete. The queue-maintenance timing flake and managed-session retention correctness are also covered by `#104` and `#105`. Keep follow-up work under the existing umbrellas so it remains separately scoped from release, dependency, and MCP-contract changes.
+The dedicated `#16` and `#34` stability lanes are complete. The queue-maintenance timing flake and managed-session retention correctness are covered by `#104` and `#105`, and the source-only `v0.3.0` release is complete. Finish the already separated formatter/lint lane, then accept only evidence-backed work under the remaining umbrellas.
 
 | Issue | Focus | Required evidence before closure or merge |
 |---|---|---|
+| #12 | Land the full-repository Prettier baseline and the separate ESLint correctness gate. | Keep mechanical formatting separate from lint fixes; require both new CI checks and the existing full matrix before closure. |
 | #43 | Keep the deep-audit umbrella open for newly substantiated input, runtime, or UX risks. | Start from a focused reproduction and preserve the three-tool public contract; do not reopen the delivered task-id or drive-relative-path work. |
 | #45 | Keep the queue-lifecycle umbrella open for operational concurrency evidence beyond the completed test lane. `#102` fenced stale recovery snapshots, `#104` stabilized the maintenance shutdown test without changing production timing, and `#105` added explicit ownership and retry-safe retention for managed sessions. | Reproduce a remaining lifecycle risk under a focused fault or multi-process test before changing queue behavior; retain token fencing, ownership evidence, and existing top-level error codes. |
 
@@ -105,7 +115,7 @@ The dedicated `#16` and `#34` stability lanes are complete. The queue-maintenanc
 
 | Umbrella | Covered by merged work | Remaining scoped work |
 |---|---|---|
-| #43 | Real-path containment (`#85`), process-tree timeout cleanup (`#87`), queue/session isolation (`#91`), runtime command and prompt hardening (`#92`), release gates (`#93`), independent provider isolation (`#96`), and the task-id/Windows drive-relative-path boundary (`#98`) cover the delivered audit findings. Managed-session ownership records in `#105` add bounded, credential-free cleanup without scanning ordinary OpenCode sessions. | Keep the umbrella for newly substantiated audit risks. Diagnostic response expansion remains deferred under #71; diff caching and broader observability remain outside this lane. |
+| #43 | Real-path containment (`#85`), process-tree timeout cleanup (`#87`), queue/session isolation (`#91`), runtime command and prompt hardening (`#92`), release gates (`#93`), independent provider isolation (`#96`), and the task-id/Windows drive-relative-path boundary (`#98`) cover the delivered audit findings. Managed-session ownership records in `#105` add bounded, credential-free cleanup without scanning ordinary OpenCode sessions. | Keep the umbrella for newly substantiated audit risks. Public diagnostic response expansion was rejected under #71; diff caching and broader observability remain outside this lane. |
 | #45 | Queue runner leases, atomic stale-owner takeover, exact-once claims, heartbeat ownership, signal cleanup, stale-task recovery, terminal-state/heartbeat polling evidence, fenced startup reservations, recovery snapshot fencing, maintenance-test stabilization, and retry-safe managed-session retention are covered by `#84`, `#91`, `#94`, `#96`, `#97`, `#102`, `#104`, and `#105`. | Keep the umbrella for remaining operational lifecycle evidence, especially fault or multi-process reproductions not covered by the closed `#34` test lane. Historical untitled or otherwise unowned sessions remain deliberately unmanaged. Do not introduce new top-level error codes or queue-control MCP tools here. |
 
 ## Duplicate / Consolidate
@@ -116,30 +126,31 @@ The dedicated `#16` and `#34` stability lanes are complete. The queue-maintenanc
 | #60 | duplicate | #19 | same allowed-roots canonicalization / symlink bypass family |
 | #24 | duplicate | #43 | broad audit follow-up umbrella, less actionable than the later audit issue |
 | #11 | duplicate | #43 | older umbrella audit issue with overlapping findings |
+| #41 | consolidate | #28 / #72 | the old future-feature bucket mixes unrelated ideas; retain only the focused cache and MCP-expansion issues |
+
+## Won't Fix
+
+| Issue | Status | Reason |
+|---|---|---|
+| #71 | wontfix | adding raw roots, stderr, exit details, or provider data to public MCP failures expands the sensitive response surface; sanitized local doctor/debug paths are the appropriate boundary |
 
 ## Deferred
 
 | Issue | Status | Reason |
 |---|---|---|
 | #17 | deferred | debug mode expands diagnostics scope and should be considered separately |
-| #26 | deferred | `test:doctor` is already in CI; the remaining decision is a non-blocking `npm audit` policy, not a new release-gate change |
-| #41 | deferred | future feature bucket, intentionally out of the stability-first path |
-| #12 | deferred | formatter and lint adoption is a separate tooling decision; reconsider after the release-readiness lane |
-| #15 | deferred | OpenCode permission precedence needs upstream-confirmed behavior before changing agent policy |
 | #28 | deferred | diff caching changes cost and freshness behavior; revisit with production usage evidence |
-| #31 | deferred | prompt de-duplication is a later agent-template design change, not a reliability fix |
-| #33 | deferred | broader feature work remains outside the stability-first lane |
-| #39 / #77 | deferred | more precise public failure codes require a deliberate compatibility/versioning decision |
-| #70 | deferred | Codex outer timeout is not reliably observable from this server; keep current documentation guidance |
-| #71 | deferred | opening more diagnostic fields risks public response-surface expansion |
+| #31 | deferred | decomposing `runOpenCodeTaskNow` is a later internal maintainability change, not a demonstrated reliability fix |
+| #33 | deferred | only the response-factory and queue role-dispatch duplication remains; the role registry and symmetric success contracts are already covered |
+| #39 / #77 | deferred | more precise public failure codes require a deliberate breaking-change/versioning decision |
 | #72 | deferred | new queue/task-control tools would expand the MCP contract |
-| #73 | deferred | `test:doctor` is already in CI; only `doctor --json` remains, as a separately designed CLI-output feature |
 
 ## Operating Rules
 
 - Keep `main` as the source of truth for whether an issue is still real.
 - Do not mix release automation, npm publication, or new MCP tools into the shortlist above; the `zod` v4 decision is already complete.
 - Keep the public MCP contract frozen for future `#43` and `#45` maintenance: exactly three tools, existing success fields, and existing top-level error codes.
+- Keep `npm audit` non-blocking until a separately reviewed dependency policy defines severity, remediation, and outage handling.
 - If a new issue duplicates one already listed here, prefer updating the canonical issue instead of growing parallel threads.
 - Keep `#43` open as the audit umbrella and `#45` open as the queue-lifecycle umbrella until their remaining scoped work has evidence.
 - Close only issues with a merged implementation and a focused regression or acceptance test; record the merged PR in this table.

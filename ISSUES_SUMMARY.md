@@ -11,7 +11,7 @@ Status meanings:
 
 ## Release Closeout Evidence
 
-`origin/main` is at `262e7bc`. The release-closeout rows below were checked against the GitHub merge commit, required Ubuntu/Windows x Node 20/22 CI checks, and GitHub closing references on 2026-07-13. A blank closing-reference cell means the PR did not declare an issue for automatic closure; it is not evidence that a separately tracked issue was skipped.
+The release baseline documented below is `262e7bc` (the `#98` merge); `#100` is the governance-only metadata update that follows it. The rows were checked against the GitHub merge commit, required Ubuntu/Windows x Node 20/22 CI checks, and GitHub closing references on 2026-07-13. A blank closing-reference cell means the PR did not declare an issue for automatic closure; it is not evidence that a separately tracked issue was skipped.
 
 | PR | Merge commit on `main` | CI evidence | GitHub closing references |
 |---|---|---|---|

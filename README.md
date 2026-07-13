@@ -10,25 +10,25 @@ The MCP server has exactly two built-in roles: `reviewer` and `planner`. It does
 
 ## Install And Configure
 
-The setup command is separate from the MCP stdio server. For this source checkout:
+After `0.3.0` is published, install the package from the npm registry and run the separate setup command:
 
 ```powershell
-npm ci
-npm run setup
+npm install -g opencode-advisor-mcp@0.3.0
+opencode-advisor-setup
 ```
 
-Before publication, install a local packed tarball instead of a registry package:
+For release-candidate validation, install the exact local packed tarball:
 
 ```powershell
 npm install -g <path-to-opencode-advisor-mcp.tgz>
 opencode-advisor-setup
 ```
 
-After publication, the registry package can use:
+For source development, install dependencies and run setup from the checkout:
 
 ```powershell
-npm install -g opencode-advisor-mcp
-opencode-advisor-setup
+npm ci
+npm run setup
 ```
 
 `opencode-advisor-setup` requires an interactive terminal. It asks for a third-party provider ID, display name, API base URL, transport (`responses` or `chat_completions`), model list, reviewer model and optional reasoning variant, planner model and optional reasoning variant, and API key. The key is hidden at entry and is never accepted from command arguments, MCP TOML, or a pipe. Setup does not inspect normal OpenCode, Codex, or Cockpit configuration, credentials, or account-login state; no OpenCode account login is required.

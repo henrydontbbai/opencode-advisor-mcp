@@ -1,6 +1,6 @@
 {
   "name": "opencode-advisor-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A local MCP server that lets Codex ask OpenCode for a read-only review pass or planning pass on local work.",
   "license": "MIT",
   "author": "henrydontbbai",

@@ -5,6 +5,7 @@
 ### Added
 
 - Added `opencode-advisor-doctor --json` for a single sanitized, machine-readable report with the same checks and exit status as the default text output.
+- Added a tag-triggered `Source Release Draft` workflow and `scripts/source-release.mjs` that pack one verified source tarball, write `SHA256SUMS.txt`, smoke the installed bins and MCP surface, and open a Draft GitHub Release without npm publication.
 
 ## 0.3.0 - 2026-07-13
 

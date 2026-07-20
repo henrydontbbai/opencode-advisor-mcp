@@ -42,7 +42,7 @@ Verify package contents do not include:
 
 ## Source-Only GitHub Release
 
-The current release path does not use the npm registry. Never rebuild the tarball after it has been verified, and never move a published tag.
+The current release path does not use the npm registry. A pushed version tag runs the `Source Release Draft` workflow, which repeats the source gates, builds and verifies one tarball, writes `SHA256SUMS.txt`, and creates a Draft GitHub Release. It never publishes the Draft or publishes to npm. Never rebuild the tarball after it has been verified, and never move a published tag.
 
 1. Record the fully verified release commit and require a clean checkout:
 
@@ -51,28 +51,30 @@ The current release path does not use the npm registry. Never rebuild the tarbal
    git status --short
    ```
 
-2. Pack that exact checkout once and retain the generated filename and integrity output:
+2. Complete the local provider gate above, update the matching dated `CHANGELOG.md` section, and confirm `package.json`, both package-lock version fields, and the intended `v<version>` tag agree.
+
+3. Create and push the annotated version tag at `$releaseCommit`, then verify the remote annotated tag dereferences to the same commit. Do not tag later documentation or cleanup commits. The workflow rejects tags whose commit is not reachable from `main`.
+
+4. The workflow installs with `npm ci`, repeats the source checks, and packs that exact checkout once with:
 
    ```powershell
    npm pack --json
    ```
 
-3. Compute `SHA256SUMS.txt`, install the exact `.tgz` into a fresh temporary prefix, and smoke all four bins plus the MCP version and three-tool handshake.
+   `scripts/source-release.mjs` computes `SHA256SUMS.txt`, installs the exact `.tgz` into a fresh temporary prefix, and smokes all four bins plus the MCP version and three-tool handshake. The workflow retains the bundle as a short-lived workflow artifact and creates one Draft GitHub Release with the exact `.tgz` and checksum. Its notes come from the matching changelog section and state that the package is source-only and not available from npm.
 
-4. Create and push annotated tag `v0.3.0` at `$releaseCommit`, then verify the remote annotated tag dereferences to the same commit. Do not tag later documentation or cleanup commits.
+5. Download both Draft assets into a new temporary directory. Verify the SHA-256 manifest, install the downloaded tarball into another fresh prefix, and repeat all four bin smokes plus the MCP handshake and doctor.
 
-5. Create one Draft GitHub Release from `v0.3.0`. Attach the exact `.tgz` and `SHA256SUMS.txt`, and state prominently that the package is source-only and not available from npm.
+6. After every manual gate passes, publish that same Draft. Verify the public release remains attached to the intended tag and exposes the same asset IDs, sizes, and API digests. Record whether GitHub reports `immutable:true`.
 
-6. Download both Draft assets into a new temporary directory. Verify the SHA-256 manifest, install the downloaded tarball into another fresh prefix, and repeat all four bin smokes plus the MCP handshake and doctor.
-
-7. Publish that same Draft. Verify the public release remains attached to the intended tag and exposes the same asset IDs, sizes, and API digests. Record whether GitHub reports `immutable:true`.
-
-8. If GitHub reports `immutable:false`, immediately anchor the exact release ID, asset IDs, filename, size, and SHA-256 in protected repository history and pin the expected digest in installation docs. A checksum downloaded beside the tarball is not an independent trust anchor.
+7. If GitHub reports `immutable:false`, immediately anchor the exact release ID, asset IDs, filename, size, and SHA-256 in protected repository history and pin the expected digest in installation docs. A checksum downloaded beside the tarball is not an independent trust anchor.
 
 ## Failure And Recovery Rules
 
 - Before tag push, stop on any failed check or hash mismatch; do not create external release state.
 - After tag push, never move, delete, or recreate the tag to conceal a failure. Retry the GitHub Release against the same tag.
+- A workflow rerun fails if a release for the tag already exists. Inspect an existing Draft manually; the workflow never overwrites or deletes it.
+- If asset upload fails after Draft creation, leave the Draft unpublished for inspection or remove only that run-created Draft after confirming it has never been published.
 - Do not silently replace a published tarball or checksum asset. If released content is defective, document the problem and ship a new patch version.
 - When GitHub immutable releases are unavailable or disabled, treat the protected-history digest as authoritative and reject any later asset whose API digest, size, or ID no longer matches the recorded evidence.
 - A notes-only typo may be corrected without changing the tag or assets.

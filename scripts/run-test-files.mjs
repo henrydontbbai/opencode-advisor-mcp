@@ -14,6 +14,7 @@ const TEST_FILES = [
   "test/provider-profile.test.mjs",
   "test/provider-runtime.test.mjs",
   "test/setup-cli.test.mjs",
+  "test/source-release.test.mjs",
 ];
 
 const DEFAULT_TIMEOUT_MS = 120000;

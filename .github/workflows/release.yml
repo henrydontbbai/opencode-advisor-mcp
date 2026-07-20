@@ -1,0 +1,94 @@
+name: Source Release Draft
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tarball: ${{ steps.bundle.outputs.tarball }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - name: Verify tagged commit
+        shell: bash
+        run: |
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+      - run: npm ci
+      - run: npm run smoke
+      - run: npm test
+      - run: npm run test:doctor
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run print-agent
+      - run: npm run print-agent -- planner
+      - name: Build source release bundle
+        id: bundle
+        shell: bash
+        run: |
+          output_dir="$RUNNER_TEMP/source-release"
+          node scripts/source-release.mjs build "$GITHUB_REF_NAME" "$output_dir" > "$RUNNER_TEMP/release.json"
+          tarball="$(node -e "const fs=require('fs'); const value=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(value.tarball)" "$RUNNER_TEMP/release.json")"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          cp "$RUNNER_TEMP/release.json" "$output_dir/release.json"
+      - name: Verify packed installation
+        shell: bash
+        run: node scripts/source-release.mjs verify "$RUNNER_TEMP/source-release/${{ steps.bundle.outputs.tarball }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-release-${{ github.ref_name }}
+          path: |
+            ${{ runner.temp }}/source-release/${{ steps.bundle.outputs.tarball }}
+            ${{ runner.temp }}/source-release/SHA256SUMS.txt
+            ${{ runner.temp }}/source-release/RELEASE_NOTES.md
+            ${{ runner.temp }}/source-release/release.json
+          if-no-files-found: error
+          retention-days: 7
+
+  draft-release:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-release-${{ github.ref_name }}
+          path: release
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          TARBALL: ${{ needs.package.outputs.tarball }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to replace it." >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --draft \
+            --verify-tag \
+            --title "opencode-advisor-mcp $TAG" \
+            --notes-file release/RELEASE_NOTES.md \
+            "release/$TARBALL" \
+            release/SHA256SUMS.txt

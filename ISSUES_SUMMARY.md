@@ -13,7 +13,7 @@ Status meanings:
 
 ## Release Closeout Evidence
 
-The release commit is `f441977` (the `#106` merge). The latest implementation baseline recorded below is `f643c54` (the `#111` merge); later governance-only commits may advance `main` without changing runtime behavior. `#100`, `#101`, `#103`, `#107`, and `#112` are governance-only metadata updates in this sequence. The rows were checked against the GitHub merge commit, required Ubuntu/Windows x Node 20/22 CI checks, and GitHub closing references on 2026-07-13. A blank closing-reference cell means the PR did not declare an issue for automatic closure; it is not evidence that a separately tracked issue was skipped.
+The release commit is `f441977` (the `#106` merge). The latest implementation baseline recorded below is `3122d70` (the `#120` merge); later governance-only commits may advance `main` without changing runtime behavior. `#100`, `#101`, `#103`, `#107`, `#112`, `#113`, and `#114` are governance-only metadata updates in this sequence. The rows through `#111` were checked on 2026-07-13; `#120` was checked against its GitHub merge commit and required Ubuntu/Windows x Node 20/22 CI checks on 2026-07-20. A blank closing-reference cell means the PR did not declare an issue for automatic closure; it is not evidence that a separately tracked issue was skipped.
 
 | PR   | Merge commit on `main` | CI evidence                                                           | GitHub closing references                    |
 | ---- | ---------------------- | --------------------------------------------------------------------- | -------------------------------------------- |
@@ -36,6 +36,7 @@ The release commit is `f441977` (the `#106` merge). The latest implementation ba
 | #109 | `5ccc59f`              | main push CI run `29266814136`: Ubuntu/Windows x Node 20/22 succeeded | #73                                          |
 | #110 | `aff2774`              | PR CI run `29273512992`: Ubuntu/Windows x Node 20/22 succeeded        | none; Prettier baseline                      |
 | #111 | `f643c54`              | PR CI run `29273850026`: Ubuntu/Windows x Node 20/22 succeeded        | #12; ESLint correctness gate                 |
+| #120 | `3122d70`              | PR CI runs `29698816478` and `29698833675`: Ubuntu/Windows x Node 20/22 succeeded | none; source-only Draft Release automation |
 
 `v0.3.0` was published as source-only GitHub Release `353319523` from `f441977` on 2026-07-13. Asset `475724780` (`opencode-advisor-mcp-0.3.0.tgz`) has size `49496` and GitHub API digest `sha256:47a4697ad28e99fd85ba2951ac21289a566378948743526f2b1cde5cbd905fa1`; asset `475724781` is the matching `SHA256SUMS.txt`. GitHub reports `immutable:false`, so installation docs and this protected branch history independently pin the expected digest instead of trusting the mutable checksum asset alone. The tag dereferences to `f441977`, and the downloaded tarball passed a fresh-prefix install, all four bin smokes, the MCP `0.3.0` handshake, the exact three-tool list, a real provider doctor, and blocker-only OpenCode planner/reviewer gates. This release process performed no npm publication or registry identity operation. All changes after `#106` remain post-release `Unreleased` work.
 
@@ -87,7 +88,7 @@ The release commit is `f441977` (the `#106` merge). The latest implementation ba
 
 ## Next
 
-The dedicated `#16` and `#34` stability lanes, the queue-maintenance timing fix, managed-session retention correctness, the source-only `v0.3.0` release, and the formatter/lint lane are complete. Accept only evidence-backed work under the remaining umbrellas.
+The dedicated `#16` and `#34` stability lanes, the queue-maintenance timing fix, managed-session retention correctness, the source-only `v0.3.0` release, the formatter/lint lane, and the source-only Draft Release automation are complete. Accept only evidence-backed work under the remaining umbrellas.
 
 | Issue | Focus                                                                                                                                                                                                                                                                                                                      | Required evidence before closure or merge                                                                                                                                                      |
 | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

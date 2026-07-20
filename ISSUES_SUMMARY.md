@@ -15,28 +15,28 @@ Status meanings:
 
 The release commit is `f441977` (the `#106` merge). The latest implementation baseline recorded below is `3122d70` (the `#120` merge); later governance-only commits may advance `main` without changing runtime behavior. `#100`, `#101`, `#103`, `#107`, `#112`, `#113`, and `#114` are governance-only metadata updates in this sequence. The rows through `#111` were checked on 2026-07-13; `#120` was checked against its GitHub merge commit and required Ubuntu/Windows x Node 20/22 CI checks on 2026-07-20. A blank closing-reference cell means the PR did not declare an issue for automatic closure; it is not evidence that a separately tracked issue was skipped.
 
-| PR   | Merge commit on `main` | CI evidence                                                           | GitHub closing references                    |
-| ---- | ---------------------- | --------------------------------------------------------------------- | -------------------------------------------- |
-| #89  | `06c198e`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | none; governance-only PR                     |
-| #91  | `8b994d6`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | #20, #90                                     |
-| #92  | `bcbb581`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | #21, #27, #44                                |
-| #93  | `fd84cd8`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | #36, #50                                     |
-| #94  | `4e8262c`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | #13, #14, #32, #40, #55                      |
-| #95  | `34e8547`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | #29, #37, #38, #48, #52, #74                 |
-| #96  | `3307c19`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | none; independent provider bootstrap         |
-| #99  | `925b6b4`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | #16                                          |
-| #97  | `fea2d2b`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | #34                                          |
-| #98  | `262e7bc`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | none; #43 remains an umbrella                |
-| #102 | `24e86a3`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | none; part of #45, which remains an umbrella |
-| #104 | `06122dc`              | main push CI run `29256376659`: Ubuntu/Windows x Node 20/22 succeeded | none; CI timing-flake test fix               |
-| #105 | `e4164b7`              | main push CI run `29258169856`: Ubuntu/Windows x Node 20/22 succeeded | none; managed-session retention, part of #45 |
-| #106 | `f441977`              | main push CI run `29259255830`: Ubuntu/Windows x Node 20/22 succeeded | none; `0.3.0` release preparation            |
-| #107 | `73f7e8b`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | none; release-governance evidence            |
-| #108 | `1d7e972`              | required Ubuntu/Windows x Node 20/22 checks succeeded                 | none; Responses request-contract evidence    |
-| #109 | `5ccc59f`              | main push CI run `29266814136`: Ubuntu/Windows x Node 20/22 succeeded | #73                                          |
-| #110 | `aff2774`              | PR CI run `29273512992`: Ubuntu/Windows x Node 20/22 succeeded        | none; Prettier baseline                      |
-| #111 | `f643c54`              | PR CI run `29273850026`: Ubuntu/Windows x Node 20/22 succeeded        | #12; ESLint correctness gate                 |
-| #120 | `3122d70`              | PR CI runs `29698816478` and `29698833675`: Ubuntu/Windows x Node 20/22 succeeded | none; source-only Draft Release automation |
+| PR   | Merge commit on `main` | CI evidence                                                                       | GitHub closing references                    |
+| ---- | ---------------------- | --------------------------------------------------------------------------------- | -------------------------------------------- |
+| #89  | `06c198e`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | none; governance-only PR                     |
+| #91  | `8b994d6`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | #20, #90                                     |
+| #92  | `bcbb581`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | #21, #27, #44                                |
+| #93  | `fd84cd8`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | #36, #50                                     |
+| #94  | `4e8262c`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | #13, #14, #32, #40, #55                      |
+| #95  | `34e8547`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | #29, #37, #38, #48, #52, #74                 |
+| #96  | `3307c19`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | none; independent provider bootstrap         |
+| #99  | `925b6b4`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | #16                                          |
+| #97  | `fea2d2b`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | #34                                          |
+| #98  | `262e7bc`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | none; #43 remains an umbrella                |
+| #102 | `24e86a3`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | none; part of #45, which remains an umbrella |
+| #104 | `06122dc`              | main push CI run `29256376659`: Ubuntu/Windows x Node 20/22 succeeded             | none; CI timing-flake test fix               |
+| #105 | `e4164b7`              | main push CI run `29258169856`: Ubuntu/Windows x Node 20/22 succeeded             | none; managed-session retention, part of #45 |
+| #106 | `f441977`              | main push CI run `29259255830`: Ubuntu/Windows x Node 20/22 succeeded             | none; `0.3.0` release preparation            |
+| #107 | `73f7e8b`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | none; release-governance evidence            |
+| #108 | `1d7e972`              | required Ubuntu/Windows x Node 20/22 checks succeeded                             | none; Responses request-contract evidence    |
+| #109 | `5ccc59f`              | main push CI run `29266814136`: Ubuntu/Windows x Node 20/22 succeeded             | #73                                          |
+| #110 | `aff2774`              | PR CI run `29273512992`: Ubuntu/Windows x Node 20/22 succeeded                    | none; Prettier baseline                      |
+| #111 | `f643c54`              | PR CI run `29273850026`: Ubuntu/Windows x Node 20/22 succeeded                    | #12; ESLint correctness gate                 |
+| #120 | `3122d70`              | PR CI runs `29698816478` and `29698833675`: Ubuntu/Windows x Node 20/22 succeeded | none; source-only Draft Release automation   |
 
 `v0.3.0` was published as source-only GitHub Release `353319523` from `f441977` on 2026-07-13. Asset `475724780` (`opencode-advisor-mcp-0.3.0.tgz`) has size `49496` and GitHub API digest `sha256:47a4697ad28e99fd85ba2951ac21289a566378948743526f2b1cde5cbd905fa1`; asset `475724781` is the matching `SHA256SUMS.txt`. GitHub reports `immutable:false`, so installation docs and this protected branch history independently pin the expected digest instead of trusting the mutable checksum asset alone. The tag dereferences to `f441977`, and the downloaded tarball passed a fresh-prefix install, all four bin smokes, the MCP `0.3.0` handshake, the exact three-tool list, a real provider doctor, and blocker-only OpenCode planner/reviewer gates. This release process performed no npm publication or registry identity operation. All changes after `#106` remain post-release `Unreleased` work.
 
